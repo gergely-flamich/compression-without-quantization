@@ -7,7 +7,7 @@ from tqdm import tqdm
 from absl import app
 from absl.flags import argparse_flags
 
-from pln import ProbabilisticLadderNetwork, VariationalAutoEncoder
+from architectures import ProbabilisticLadderNetwork, VariationalAutoEncoder
 
 import tensorflow.compat.v1 as tf
 
@@ -84,16 +84,16 @@ def train(args):
     # ------------------------------------------------------------------------
     
     if args.model == "pln":
-        model = ProbabilisticLadderNetwork(first_level_filters=196,
-                                           second_level_filters=196,
-                                           first_level_latent_channels=128,
-                                           second_level_latent_channels=24,
+        model = ProbabilisticLadderNetwork(first_level_filters=args.filters1,
+                                           second_level_filters=args.filters2,
+                                           first_level_latent_channels=args.latent_channels1,
+                                           second_level_latent_channels=args.latent_channels2,
                                            likelihood=args.likelihood,
                                            learn_gamma=args.learn_gamma)
 
     elif args.model == "vae":
-        model = VariationalAutoEncoder(num_filters=128,
-                                       num_latent_channels=128,
+        model = VariationalAutoEncoder(num_filters=args.filters,
+                                       num_latent_channels=args.latent_channels,
                                        likelihood=args.likelihood,
                                        learn_gamma=args.learn_gamma)
     
@@ -180,8 +180,6 @@ def parse_args(argv):
     
     train_mode.add_argument("--data_path", "-D",
                             help="Path to PNG dataset")
-    train_mode.add_argument("--model", default="vae",
-                            help="Model to train: vae or pln")
     train_mode.add_argument("--patch_size", default=256, type=int,
                             help="Square patch size for the random crops")
     train_mode.add_argument("--batch_size", default=8, type=int,
@@ -204,6 +202,33 @@ def parse_args(argv):
                             help="Number of warmup steps for the KL coefficient")
     train_mode.add_argument("--learn_gamma", action="store_true", default=False,
                             help="Turns on the gamma learning technique suggested by Dai and Wipf")
+    
+    train_subparsers = train_mode.add_subparsers(title="model",
+                                                 dest="model",
+                                                 help="Current available modes: vae, pln")
+    # Train the VAE
+    train_vae = train_subparsers.add_parser("vae",
+                                            formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+                                            description="Train a VAE")
+    
+    train_mode.add_argument("--filters", default=128, type=int,
+                            help="Number of filters for the transforms")
+    train_mode.add_argument("--latent_channels", default=128, type=int,
+                            help="Number of channels in the latent space")
+    # Train the PLN
+    train_pln= train_subparsers.add_parser("pln",
+                                            formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+                                            description="Train a PLN")
+    
+    train_mode.add_argument("--filters1", default=196, type=int,
+                            help="Number of filters for the first-level transforms")
+    train_mode.add_argument("--filters2", default=128, type=int,
+                            help="Number of filters for the second-level transforms")
+    train_mode.add_argument("--latent_channels1", default=128, type=int,
+                            help="Number of channels in the first-level latent space")
+    train_mode.add_argument("--latent_channels2", default=24, type=int,
+                            help="Number of channels in the second-level latent space")
+    
     
     # Parse arguments
     args = parser.parse_args(argv[1:])
