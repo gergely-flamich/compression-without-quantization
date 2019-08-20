@@ -13,6 +13,12 @@ import tensorflow.compat.v1 as tf
 
 import numpy as np
 
+# ============================================================================
+# ============================================================================
+# Helper functions
+# ============================================================================
+# ============================================================================
+
 def read_png(filename):
     """
     Loads a PNG image file. Taken from Balle's implementation
@@ -64,6 +70,11 @@ def create_dataset(dataset_path, patch_size, batch_size, preprocess_threads, fil
         
     return train_dataset
 
+# ============================================================================
+# ============================================================================
+# Model Training
+# ============================================================================
+# ============================================================================
 
 def train(args):
     
@@ -151,7 +162,17 @@ def train(args):
         while not sess.should_stop():
             sess.run(train_step)
 
-        
+# ============================================================================
+# ============================================================================
+# Compresssion
+# ============================================================================
+# ============================================================================
+
+def compress(args):
+    tf.enable_eager_execution()
+    
+    print(tf.ones(1))
+
 # ============================================================================
 # ============================================================================
 # Plumbing
@@ -173,7 +194,9 @@ def parse_args(argv):
                                        dest="mode",
                                        help="Current available modes: train")
     
+    # ========================================================================
     # Training mode
+    # ========================================================================
     train_mode = subparsers.add_parser("train",
                                        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
                                        description="Train a new model")
@@ -211,24 +234,41 @@ def parse_args(argv):
                                             formatter_class=argparse.ArgumentDefaultsHelpFormatter,
                                             description="Train a VAE")
     
-    train_mode.add_argument("--filters", default=128, type=int,
+    train_vae.add_argument("--filters", default=128, type=int,
                             help="Number of filters for the transforms")
-    train_mode.add_argument("--latent_channels", default=128, type=int,
+    train_vae.add_argument("--latent_channels", default=128, type=int,
                             help="Number of channels in the latent space")
     # Train the PLN
-    train_pln= train_subparsers.add_parser("pln",
+    train_pln = train_subparsers.add_parser("pln",
                                             formatter_class=argparse.ArgumentDefaultsHelpFormatter,
                                             description="Train a PLN")
     
-    train_mode.add_argument("--filters1", default=196, type=int,
+    train_pln.add_argument("--filters1", default=196, type=int,
                             help="Number of filters for the first-level transforms")
-    train_mode.add_argument("--filters2", default=128, type=int,
+    train_pln.add_argument("--filters2", default=128, type=int,
                             help="Number of filters for the second-level transforms")
-    train_mode.add_argument("--latent_channels1", default=128, type=int,
+    train_pln.add_argument("--latent_channels1", default=128, type=int,
                             help="Number of channels in the first-level latent space")
-    train_mode.add_argument("--latent_channels2", default=24, type=int,
+    train_pln.add_argument("--latent_channels2", default=24, type=int,
                             help="Number of channels in the second-level latent space")
     
+    
+    # ========================================================================
+    # Compression mode
+    # ========================================================================
+    compress_mode = subparsers.add_parser("compress",
+                                           formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+                                           description="Compress using a trained model")
+    
+    compress_mode.add_argument("--file",
+                               help="File to compress")
+    compress_mode.add_argument("--model", 
+                               default="pln",
+                               help="Model type used for compression")
+    
+    # ========================================================================
+    # Training mode
+    # ========================================================================
     
     # Parse arguments
     args = parser.parse_args(argv[1:])
@@ -242,6 +282,8 @@ def parse_args(argv):
 def main(args):
     if args.mode == "train":
         train(args)
+    elif args.mode == "compress":
+        compress(args)
 
 if __name__ == "__main__":
     app.run(main, flags_parser=parse_args)
