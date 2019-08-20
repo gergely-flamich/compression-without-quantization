@@ -20,8 +20,8 @@ class AnalysisTransform_1(tfl.Layer):
     def __init__(self, 
                  num_filters, 
                  num_latent_channels,
-                 *args, 
                  padding="same_zeros",
+                 *args,
                  **kwargs):
         
         self.num_filters = num_filters
@@ -33,25 +33,25 @@ class AnalysisTransform_1(tfl.Layer):
         
     def build(self, input_shape):
         
-        self._layers = [
-            tfc.SignalConv2D(self.num_filters, 
-                             (5, 5), 
+        self.layers = [
+            tfc.SignalConv2D(filters=self.num_filters, 
+                             kernel_support=(5, 5), 
                              name="layer_0", 
                              corr=True, 
                              strides_down=2,
                              padding=self.padding, 
                              use_bias=True,
                              activation=tfc.GDN(name="gdn_0")),
-            tfc.SignalConv2D(self.num_filters, 
-                             (5, 5), 
+            tfc.SignalConv2D(filters=self.num_filters, 
+                             kernel_support=(5, 5), 
                              name="layer_1", 
                              corr=True, 
                              strides_down=2,
                              padding=self.padding, 
                              use_bias=True,
                              activation=tfc.GDN(name="gdn_1")),
-            tfc.SignalConv2D(self.num_filters, 
-                             (5, 5), 
+            tfc.SignalConv2D(filters=self.num_filters, 
+                             kernel_support=(5, 5), 
                              name="layer_2", 
                              corr=True, 
                              strides_down=2, 
@@ -61,34 +61,32 @@ class AnalysisTransform_1(tfl.Layer):
         
         
         # Note the linear activation
-        self.loc_head = tfc.SignalConv2D(self.num_latent_channels, 
-                                          (5, 5), 
-                                          name="layer_loc", 
-                                          corr=True, 
-                                          strides_down=2,
-                                          padding=self.padding, 
-                                          use_bias=True,
-                                          activation=None)
+        self.loc_head = tfc.SignalConv2D(filters=self.num_latent_channels, 
+                                         kernel_support=(5, 5), 
+                                         name="layer_loc", 
+                                         corr=True, 
+                                         strides_down=2,
+                                         padding=self.padding, 
+                                         use_bias=False,
+                                         activation=None)
         
-        # Note the exponential activation
-        self.scale_head = tfc.SignalConv2D(self.num_latent_channels, 
-                                            (5, 5), 
-                                            name="layer_scale", 
-                                            corr=True, 
-                                            strides_down=2,
-                                            padding=self.padding, 
-                                            use_bias=True,
-                                            activation=tf.math.exp)
+        # Note the exp activation
+        self.scale_head = tfc.SignalConv2D(filters=self.num_latent_channels, 
+                                           kernel_support=(5, 5), 
+                                           name="layer_scale", 
+                                           corr=True, 
+                                           strides_down=2,
+                                           padding=self.padding, 
+                                           use_bias=False,
+                                           activation=tf.math.exp)
         
         super(AnalysisTransform_1, self).build(input_shape)
           
             
-    def call(self, inputs):
-        
-        activations = inputs
+    def call(self, activations):
         
         # Omit the loc and scale heads
-        for layer in self._layers[:-2]:
+        for layer in self.layers:
             activations = layer(activations)
             
         self.loc = self.loc_head(activations)
@@ -111,8 +109,8 @@ class SynthesisTransform_1(tfl.Layer):
     
     def __init__(self, 
                  num_filters,
-                 *args, 
                  padding="same_zeros",
+                 *args,
                  **kwargs):
         
         self.num_filters = num_filters
@@ -122,9 +120,9 @@ class SynthesisTransform_1(tfl.Layer):
         
     def build(self, input_shape):
         
-        self._layers = [
-            tfc.SignalConv2D(self.num_filters, 
-                             (5, 5), 
+        self.layers = [
+            tfc.SignalConv2D(filters=self.num_filters, 
+                             kernel_support=(5, 5), 
                              name="layer_0", 
                              corr=False, 
                              strides_up=2,
@@ -132,8 +130,8 @@ class SynthesisTransform_1(tfl.Layer):
                              use_bias=True,
                              activation=tfc.GDN(name="igdn_0", inverse=True)),
             
-            tfc.SignalConv2D(self.num_filters, 
-                             (5, 5), 
+            tfc.SignalConv2D(filters=self.num_filters, 
+                             kernel_support=(5, 5), 
                              name="layer_1", 
                              corr=False, 
                              strides_up=2,
@@ -141,8 +139,8 @@ class SynthesisTransform_1(tfl.Layer):
                              use_bias=True,
                              activation=tfc.GDN(name="igdn_1", inverse=True)),
             
-            tfc.SignalConv2D(self.num_filters, 
-                             (5, 5), 
+            tfc.SignalConv2D(filters=self.num_filters, 
+                             kernel_support=(5, 5), 
                              name="layer_2", 
                              corr=False, 
                              strides_up=2,
@@ -151,22 +149,22 @@ class SynthesisTransform_1(tfl.Layer):
                              activation=tfc.GDN(name="igdn_2", inverse=True)),
             
             # The output always has 3 channels
-            tfc.SignalConv2D(3, 
-                             (5, 5), 
+            tfc.SignalConv2D(filters=3, 
+                             kernel_support=(5, 5), 
                              name="layer_3", 
                              corr=False, 
                              strides_up=2,
                              padding=self.padding, 
                              use_bias=True,
-                             activation=None)]
+                             activation=None),
+           # tf.nn.sigmoid
+        ]
         
         super(SynthesisTransform_1, self).build(input_shape)
 
-    def call(self, inputs):
+    def call(self, activations):
         
-        activations = inputs
-        
-        for layer in self._layers:
+        for layer in self.layers:
             activations = layer(activations)
             
         return activations
@@ -184,8 +182,8 @@ class AnalysisTransform_2(tfl.Layer):
     def __init__(self, 
                  num_filters, 
                  num_latent_channels,
-                 *args, 
                  padding="same_zeros",
+                 *args, 
                  **kwargs):
         
         self.num_filters = num_filters
@@ -195,29 +193,29 @@ class AnalysisTransform_2(tfl.Layer):
 
     def build(self, input_shape):
         
-        self._layers = [
-            tfc.SignalConv2D(self.num_filters, 
-                             (3, 3),
+        self.layers = [
+            tfc.SignalConv2D(filters=self.num_filters, 
+                             kernel_support=(3, 3),
                              name="layer_0",
                              corr=True,
                              strides_down=1,
                              padding=self.padding,
                              use_bias=True,
-                             activation=tf.nn.relu),
+                             activation=tf.nn.leaky_relu),
             
-            tfc.SignalConv2D(self.num_filters, 
-                             (5, 5),
+            tfc.SignalConv2D(filters=self.num_filters, 
+                             kernel_support=(5, 5),
                              name="layer_1",
                              corr=True,
                              strides_down=2,
                              padding=self.padding,
                              use_bias=True,
-                             activation=tf.nn.relu),
+                             activation=tf.nn.leaky_relu),
         ]
         
         # Note the linear activation
-        self.loc_head = tfc.SignalConv2D(self.num_filters, 
-                                         (5, 5),
+        self.loc_head = tfc.SignalConv2D(filters=self.num_filters, 
+                                         kernel_support=(5, 5),
                                          name="layer_loc",
                                          corr=True,
                                          strides_down=2,
@@ -226,8 +224,8 @@ class AnalysisTransform_2(tfl.Layer):
                                          activation=None)
         
         # Note the sigmoid activation
-        self.scale_head = tfc.SignalConv2D(self.num_filters, 
-                                           (5, 5),
+        self.scale_head = tfc.SignalConv2D(filters=self.num_filters, 
+                                           kernel_support=(5, 5),
                                            name="layer_scale",
                                            corr=True,
                                            strides_down=2,
@@ -243,7 +241,7 @@ class AnalysisTransform_2(tfl.Layer):
         activations = inputs
         
         # Omit the loc and scale heads
-        for layer in self._layers[:-2]:
+        for layer in self.layers:
             activations = layer(activations)
             
         self.loc = self.loc_head(activations)
@@ -266,8 +264,8 @@ class SynthesisTransform_2(tfl.Layer):
     def __init__(self, 
                  num_filters, 
                  num_output_channels,
-                 *args, 
                  padding="same_zeros",
+                 *args, 
                  **kwargs):
         
         self.num_filters = num_filters
@@ -277,9 +275,9 @@ class SynthesisTransform_2(tfl.Layer):
         super(SynthesisTransform_2, self).__init__(*args, **kwargs)
 
     def build(self, input_shape):
-        self._layers = [
-            tfc.SignalConv2D(self.num_filters, 
-                             (5, 5), 
+        self.layers = [
+            tfc.SignalConv2D(filters=self.num_filters, 
+                             kernel_support=(5, 5), 
                              name="layer_0", 
                              corr=False, 
                              strides_up=2, 
@@ -287,8 +285,8 @@ class SynthesisTransform_2(tfl.Layer):
                              use_bias=True, 
                              kernel_parameterizer=None,
                              activation=tf.nn.leaky_relu),
-            tfc.SignalConv2D(self.num_filters, 
-                             (5, 5), 
+            tfc.SignalConv2D(filters=self.num_filters, 
+                             kernel_support=(5, 5), 
                              name="layer_1", 
                              corr=False, 
                              strides_up=2, 
@@ -299,8 +297,8 @@ class SynthesisTransform_2(tfl.Layer):
         ]
         
         # Note the linear activation
-        self.loc_head = tfc.SignalConv2D(self.num_output_channels, 
-                                         (3, 3), 
+        self.loc_head = tfc.SignalConv2D(filters=self.num_output_channels, 
+                                         kernel_support=(3, 3), 
                                          name="layer_loc", 
                                          corr=False, 
                                          strides_up=1, 
@@ -309,16 +307,16 @@ class SynthesisTransform_2(tfl.Layer):
                                          kernel_parameterizer=None,
                                          activation=None)
         
-        # Note the exponential activation
-        self.scale_head = tfc.SignalConv2D(self.num_output_channels, 
-                                           (3, 3), 
+        # Note the softplus activation
+        self.scale_head = tfc.SignalConv2D(filters=self.num_output_channels, 
+                                           kernel_support=(3, 3), 
                                            name="layer_scale", 
                                            corr=False, 
                                            strides_up=1, 
                                            padding=self.padding, 
                                            use_bias=True, 
                                            kernel_parameterizer=None,
-                                           activation=tf.math.exp)
+                                           activation=tf.nn.softplus)
         
         super(SynthesisTransform_2, self).build(input_shape)
 
@@ -328,13 +326,14 @@ class SynthesisTransform_2(tfl.Layer):
         activations = inputs
         
         # Omit the loc and scale heads
-        for layer in self._layers[:-2]:
+        for layer in self.layers:
             activations = layer(activations)
             
         self.loc = self.loc_head(activations)
         self.scale = self.scale_head(activations)
         
-        self.prior = tfd.Normal(loc=self.loc, scale=self.scale)
+        self.prior = tfd.Normal(loc=self.loc, 
+                                scale=self.scale)
             
         return self.prior.sample()
     
@@ -386,6 +385,10 @@ class ProbabilisticLadderNetwork(tfl.Layer):
     def second_level_kl(self):
         return tfd.kl_divergence(self.posterior_2, self.prior_2)    
         
+        
+    def bpp(self, num_pixels):
+        return (tf.reduce_sum(self.first_level_kl) +
+                tf.reduce_sum(self.second_level_kl)) / (np.log(2) * num_pixels)
         
     def build(self, input_shape):
         
@@ -464,6 +467,90 @@ class ProbabilisticLadderNetwork(tfl.Layer):
         # Perform first level synthesis transform on the first level sample
         reconstruction = self.synthesis_transform_1(z_1)
         
+        self.likelihood_dist = self.likelihood_dist_family(loc=reconstruction,
+                                                           scale=tf.math.exp(self.log_gamma))
+        
+        self.log_likelihood = self.likelihood_dist.log_prob(inputs)
+        
+        return reconstruction
+    
+    
+# =====================================================================
+# =====================================================================
+# VAE definition
+# =====================================================================
+# =====================================================================
+
+class VariationalAutoEncoder(tfl.Layer):
+    
+    def __init__(self,
+                 num_filters,
+                 num_latent_channels,
+                 padding="same_zeros",
+                 likelihood="gaussian",
+                 learn_gamma=False,
+                 *args,
+                 **kwargs):
+        
+        self.num_filters = num_filters
+        self.num_latent_channels = num_latent_channels
+        self.padding = padding
+        
+        self.learn_gamma = learn_gamma
+        
+        if likelihood == "gaussian":
+            self.likelihood_dist_family = tfd.Normal
+            
+        elif likelihood == "laplace":
+            self.likelihood_dist_family = tfd.Laplace
+            
+        else:
+            raise Exception("Unknown likelihood: {}".format(likelihood))
+        
+        super(VariationalAutoEncoder, self).__init__(*args, **kwargs)
+        
+        
+    @property
+    def kl_divergence(self):
+        return tfd.kl_divergence(self.posterior, self.prior)    
+        
+    def bpp(self, num_pixels):
+        return tf.reduce_sum(self.kl_divergence) / (np.log(2) * num_pixels)
+        
+    def build(self, input_shape):
+        
+        self.analysis_transform = AnalysisTransform_1(num_filters=self.num_filters,
+                                                      num_latent_channels=self.num_latent_channels,
+                                                      padding=self.padding)
+        
+        self.synthesis_transform = SynthesisTransform_1(num_filters=self.num_filters,
+                                                        padding=self.padding)
+        
+        if self.learn_gamma:
+            self.log_gamma = self.add_variable("log_gamma", 
+                                               dtype=tf.float32, 
+                                               initializer=tf.compat.v1.constant_initializer(0.),
+                                               trainable=True)
+            
+        else:
+            self.log_gamma = tf.constant(0., dtype=tf.float32)
+        
+        super(VariationalAutoEncoder, self).build(input_shape)
+        
+        
+    def call(self, inputs):
+        
+        # Perform analysis pass
+        z = self.analysis_transform(inputs)
+        
+        # Perform reconstruction
+        reconstruction = self.synthesis_transform(z)
+        
+        # Set latent distributions
+        self.prior = self.analysis_transform.prior
+        self.posterior = self.analysis_transform.posterior
+        
+        # Likelihood
         self.likelihood_dist = self.likelihood_dist_family(loc=reconstruction,
                                                            scale=tf.math.exp(self.log_gamma))
         

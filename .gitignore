@@ -1,6 +1,10 @@
 compression_venv/
 compression-venv/
 
+# Scratch file
+bls2017.py
+
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
