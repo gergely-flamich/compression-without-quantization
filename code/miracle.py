@@ -13,6 +13,8 @@ import tensorflow.compat.v1 as tf
 
 import numpy as np
 
+import matplotlib.pyplot as plt
+
 # ============================================================================
 # ============================================================================
 # Helper functions
@@ -169,9 +171,44 @@ def train(args):
 # ============================================================================
 
 def compress(args):
-    tf.enable_eager_execution()
     
-    print(tf.ones(1))
+    # Load input image and add batch dimension.
+    image = read_png(args.input_file)
+    image = tf.expand_dims(image, 0)
+    image.set_shape([1, None, None, 3])
+    image_shape = tf.shape(image)
+    
+    if args.model == "pln":
+        model = ProbabilisticLadderNetwork(first_level_filters=args.filters1,
+                                           second_level_filters=args.filters2,
+                                           first_level_latent_channels=args.latent_channels1,
+                                           second_level_latent_channels=args.latent_channels2,
+                                           likelihood="gaussian", # These doesn't matter for compression
+                                           learn_gamma=True)
+        
+    elif args.model == "vae":
+        model = VariationalAutoEncoder(num_filters=args.filters,
+                                       num_latent_channels=args.latent_channels,
+                                       likelihood="gaussian",
+                                       learn_gamma=True)
+        
+        
+    reconstruction = model(image)
+        
+    with tf.Session() as sess:
+        # Load the latest model checkpoint, get the compressed string and the tensor
+        # shapes.
+        latest = tf.train.latest_checkpoint(checkpoint_dir=args.model_dir)
+        saver = tf.train.import_meta_graph(latest + '.meta', clear_devices=True)
+        saver.restore(sess, latest)
+        #model.load_weights(latest)
+#         tf.train.Saver(model.trainable_variables).restore(sess, save_path=latest)
+        
+        #im = sess.run(write_png("haha.png", reconstruction[0]))
+        model.save_weights(args.output_dir + "/pln-test.weights")
+#         sess.run(reconstruction)
+#         model.save_latent_statistics(sess, args.output_dir)
+        
 
 # ============================================================================
 # ============================================================================
@@ -187,7 +224,7 @@ def parse_args(argv):
     parser.add_argument("--verbose", "-V", action="store_true",
                         help="Turn logging on")
     
-    parser.add_argument("--model_dir", "-M", 
+    parser.add_argument("--model_dir", "-M", required=True,
                         help="Model directory where we will save the checkpoints and Tensorboard logs")
     
     subparsers = parser.add_subparsers(title="mode",
@@ -229,28 +266,7 @@ def parse_args(argv):
     train_subparsers = train_mode.add_subparsers(title="model",
                                                  dest="model",
                                                  help="Current available modes: vae, pln")
-    # Train the VAE
-    train_vae = train_subparsers.add_parser("vae",
-                                            formatter_class=argparse.ArgumentDefaultsHelpFormatter,
-                                            description="Train a VAE")
     
-    train_vae.add_argument("--filters", default=128, type=int,
-                            help="Number of filters for the transforms")
-    train_vae.add_argument("--latent_channels", default=128, type=int,
-                            help="Number of channels in the latent space")
-    # Train the PLN
-    train_pln = train_subparsers.add_parser("pln",
-                                            formatter_class=argparse.ArgumentDefaultsHelpFormatter,
-                                            description="Train a PLN")
-    
-    train_pln.add_argument("--filters1", default=196, type=int,
-                            help="Number of filters for the first-level transforms")
-    train_pln.add_argument("--filters2", default=128, type=int,
-                            help="Number of filters for the second-level transforms")
-    train_pln.add_argument("--latent_channels1", default=128, type=int,
-                            help="Number of channels in the first-level latent space")
-    train_pln.add_argument("--latent_channels2", default=24, type=int,
-                            help="Number of channels in the second-level latent space")
     
     
     # ========================================================================
@@ -260,15 +276,46 @@ def parse_args(argv):
                                            formatter_class=argparse.ArgumentDefaultsHelpFormatter,
                                            description="Compress using a trained model")
     
-    compress_mode.add_argument("--file",
+    compress_mode.add_argument("--input_file", required=True,
                                help="File to compress")
-    compress_mode.add_argument("--model", 
-                               default="pln",
-                               help="Model type used for compression")
+    
+    compress_mode.add_argument("--output_dir", required=True,
+                               help="Output directory")
+    
+    compress_subparsers = compress_mode.add_subparsers(title="model",
+                                                         dest="model",
+                                                         help="Current available modes: vae, pln")
     
     # ========================================================================
-    # Training mode
+    # Decompress mode
     # ========================================================================
+    
+    # ========================================================================
+    # Add model specific stuff to each subparser
+    # ========================================================================
+    
+    for subpars in [train_subparsers, compress_subparsers]:
+        vae_model_parser = subpars.add_parser("vae",
+                                                formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+                                                description="Train a VAE")
+
+        vae_model_parser.add_argument("--filters", default=128, type=int,
+                                        help="Number of filters for the transforms")
+        vae_model_parser.add_argument("--latent_channels", default=128, type=int,
+                                        help="Number of channels in the latent space")
+        # Train the PLN
+        pln_model_parser = subpars.add_parser("pln",
+                                                formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+                                                description="Train a PLN")
+
+        pln_model_parser.add_argument("--filters1", default=196, type=int,
+                                        help="Number of filters for the first-level transforms")
+        pln_model_parser.add_argument("--filters2", default=128, type=int,
+                                        help="Number of filters for the second-level transforms")
+        pln_model_parser.add_argument("--latent_channels1", default=128, type=int,
+                                        help="Number of channels in the first-level latent space")
+        pln_model_parser.add_argument("--latent_channels2", default=24, type=int,
+                                        help="Number of channels in the second-level latent space")
     
     # Parse arguments
     args = parser.parse_args(argv[1:])

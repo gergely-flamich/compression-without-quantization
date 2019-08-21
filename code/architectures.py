@@ -6,6 +6,8 @@ tfd = tfp.distributions
 tfk = tf.keras
 tfl = tf.keras.layers
 
+from losses import SsimMultiscalePseudo, MixPseudo
+
 # =====================================================================
 # =====================================================================
 # First Level
@@ -344,7 +346,7 @@ class SynthesisTransform_2(tfl.Layer):
 # =====================================================================
 # =====================================================================
 
-class ProbabilisticLadderNetwork(tfl.Layer):
+class ProbabilisticLadderNetwork(tfk.Model):
     
     def __init__(self,
                  first_level_filters,
@@ -371,6 +373,12 @@ class ProbabilisticLadderNetwork(tfl.Layer):
         elif likelihood == "laplace":
             self.likelihood_dist_family = tfd.Laplace
             
+        elif likelihood == "ssim":
+            self.likelihood_dist_family = SsimMultiscalePseudo
+            
+        elif likelihood == "mix":
+            self.likelihood_dist_family = MixPseudo
+            
         else:
             raise Exception("Unknown likelihood: {}".format(likelihood))
         
@@ -389,6 +397,29 @@ class ProbabilisticLadderNetwork(tfl.Layer):
     def bpp(self, num_pixels):
         return (tf.reduce_sum(self.first_level_kl) +
                 tf.reduce_sum(self.second_level_kl)) / (np.log(2) * num_pixels)
+    
+    def save_latent_statistics(self, sess, dir_path):
+        
+        q1_loc = self.posterior_1.loc.eval(session = sess)
+        q1_scale = self.posterior_1.scale.eval(session = sess)
+
+        p1_loc = self.prior_1.loc.eval(session = sess)
+        p1_scale = self.prior_1.scale.eval(session = sess)
+        
+        q2_loc = self.posterior_2.loc.eval(session = sess)
+        q2_scale = self.posterior_2.scale.eval(session = sess)
+        
+        p2_loc = self.prior_2.loc.eval(session = sess)
+        p2_scale = self.prior_2.scale.eval(session = sess)
+        
+        np.save(dir_path + "/pln_q1_loc.npy", q1_loc)
+        np.save(dir_path + "/pln_q1_scale.npy", q1_scale)
+        np.save(dir_path + "/pln_p1_loc.npy", p1_loc)
+        np.save(dir_path + "/pln_p1_scale.npy", p1_scale)
+        np.save(dir_path + "/pln_q2_loc.npy", q2_loc)
+        np.save(dir_path + "/pln_q2_scale.npy", q2_scale)
+        np.save(dir_path + "/pln_p2_loc.npy", p2_loc)
+        np.save(dir_path + "/pln_p2_scale.npy", p2_scale)
         
     def build(self, input_shape):
         
@@ -481,7 +512,7 @@ class ProbabilisticLadderNetwork(tfl.Layer):
 # =====================================================================
 # =====================================================================
 
-class VariationalAutoEncoder(tfl.Layer):
+class VariationalAutoEncoder(tfk.Model):
     
     def __init__(self,
                  num_filters,
@@ -516,6 +547,19 @@ class VariationalAutoEncoder(tfl.Layer):
         
     def bpp(self, num_pixels):
         return tf.reduce_sum(self.kl_divergence) / (np.log(2) * num_pixels)
+    
+    def save_latent_statistics(self, sess, dir_path):
+        
+        q_loc = self.posterior.loc.eval(session = sess)
+        q_scale = self.posterior.scale.eval(session = sess)
+        
+        p_loc = self.prior.loc.eval(session = sess)
+        p_scale = self.prior.scale.eval(session = sess)
+        
+        np.save(dir_path + "/vae_q_loc.npy", q_loc)
+        np.save(dir_path + "/vae_q_scale.npy", q_scale)
+        np.save(dir_path + "/vae_p_loc.npy", p_loc)
+        np.save(dir_path + "/vae_p_scale.npy", p_scale)
         
     def build(self, input_shape):
         
@@ -536,7 +580,7 @@ class VariationalAutoEncoder(tfl.Layer):
             self.log_gamma = tf.constant(0., dtype=tf.float32)
         
         super(VariationalAutoEncoder, self).build(input_shape)
-        
+
         
     def call(self, inputs):
         
