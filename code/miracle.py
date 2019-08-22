@@ -7,7 +7,8 @@ from tqdm import tqdm
 from absl import app
 from absl.flags import argparse_flags
 
-from architectures import ProbabilisticLadderNetwork, VariationalAutoEncoder
+from pln import ProbabilisticLadderNetwork
+from vae import VariationalAutoEncoder
 
 import tensorflow.compat.v1 as tf
 
@@ -174,6 +175,7 @@ def compress(args):
     
     # Load input image and add batch dimension.
     image = read_png(args.input_file)
+#     image = tf.image.random_crop(image, [128, 128, 3])
     image = tf.expand_dims(image, 0)
     image.set_shape([1, None, None, 3])
     image_shape = tf.shape(image)
@@ -201,14 +203,59 @@ def compress(args):
         latest = tf.train.latest_checkpoint(checkpoint_dir=args.model_dir)
         saver = tf.train.import_meta_graph(latest + '.meta', clear_devices=True)
         saver.restore(sess, latest)
-        #model.load_weights(latest)
-#         tf.train.Saver(model.trainable_variables).restore(sess, save_path=latest)
         
-        #im = sess.run(write_png("haha.png", reconstruction[0]))
-        model.save_weights(args.output_dir + "/pln-test.weights")
-#         sess.run(reconstruction)
-#         model.save_latent_statistics(sess, args.output_dir)
+        model.code_image_greedy(session=sess,
+                                image=image, 
+                                seed=args.seed, 
+                                n_steps=args.n_steps,
+                                n_bits_per_step=args.n_bits_per_step,
+                                comp_file_path=args.output_file,
+                                first_level_max_group_size_bits=args.first_level_max_group_size_bits,
+                                use_importance_sampling=True,
+                                second_level_n_bits_per_group=args.second_level_n_bits_per_group,
+                                second_level_max_group_size_bits=args.second_level_max_group_size_bits,
+                                second_level_dim_kl_bit_limit=args.second_level_dim_kl_bit_limit,
+                                outlier_index_bytes=args.outlier_index_bytes,
+                                outlier_sample_bytes=args.outlier_sample_bytes,
+                                verbose=args.verbose)
+
         
+# ============================================================================
+# ============================================================================
+# Decompresssion
+# ============================================================================
+# ============================================================================
+
+def decompress(args):
+    
+    if args.model == "pln":
+        model = ProbabilisticLadderNetwork(first_level_filters=args.filters1,
+                                           second_level_filters=args.filters2,
+                                           first_level_latent_channels=args.latent_channels1,
+                                           second_level_latent_channels=args.latent_channels2,
+                                           likelihood="gaussian", # These doesn't matter for compression
+                                           learn_gamma=True)
+        
+    elif args.model == "vae":
+        model = VariationalAutoEncoder(num_filters=args.filters,
+                                       num_latent_channels=args.latent_channels,
+                                       likelihood="gaussian",
+                                       learn_gamma=True)
+        
+    r = model(tf.zeros((1, 128, 128, 3)))
+    with tf.Session() as sess:
+        # Load the latest model checkpoint, get the compressed string and the tensor
+        # shapes.
+        latest = tf.train.latest_checkpoint(checkpoint_dir=args.model_dir)
+        saver = tf.train.import_meta_graph(latest + '.meta', clear_devices=True)
+        saver.restore(sess, latest)
+        sess.run(r)
+        
+        reconstruction = model.decode_image_greedy(session=sess,
+                                                  comp_file_path=args.comp_file,
+                                                  verbose=args.verbose)
+        
+        sess.run(write_png(args.output_file, reconstruction))
 
 # ============================================================================
 # ============================================================================
@@ -267,7 +314,7 @@ def parse_args(argv):
                                                  dest="model",
                                                  help="Current available modes: vae, pln")
     
-    
+    train_subparsers.required = True
     
     # ========================================================================
     # Compression mode
@@ -278,23 +325,55 @@ def parse_args(argv):
     
     compress_mode.add_argument("--input_file", required=True,
                                help="File to compress")
+    compress_mode.add_argument("--output_file", required=True,
+                               help="Output file")
     
-    compress_mode.add_argument("--output_dir", required=True,
-                               help="Output directory")
-    
+    compress_mode.add_argument("--seed", default=42, type=int,
+                            help="Seed to use in the compressor")
+    compress_mode.add_argument("--n_steps", default=3, type=int,
+                            help="Number of shards for the greedy sampler")
+    compress_mode.add_argument("--n_bits_per_step", default=3, type=int,
+                            help="Number of bits used to code a sample from one shard in the greedy sampler")
+    compress_mode.add_argument("--first_level_max_group_size_bits", default=12, type=int,
+                            help="Number of bits used to code group sizes in the first-level sampler")
+    compress_mode.add_argument("--second_level_n_bits_per_group", default=20, type=int,
+                            help="Maximum total group KL in bits in the second-level sampler")
+    compress_mode.add_argument("--second_level_max_group_size_bits", default=4, type=int,
+                            help="The number of bits used to code group sizes in the second-level sampler")
+    compress_mode.add_argument("--second_level_dim_kl_bit_limit", default=12, type=int,
+                            help="Maximum KL of a single dimension before it is deemed an outlier in the second-level sampler")
+    compress_mode.add_argument("--outlier_index_bytes", default=2, type=int,
+                            help="Bytes dedicated to coding the outliers' indices in the second-level sampler")
+    compress_mode.add_argument("--outlier_sample_bytes", default=3, type=int,
+                            help="Bytes dedicated to coding the outlier samples in the second-level sampler")
+
     compress_subparsers = compress_mode.add_subparsers(title="model",
-                                                         dest="model",
-                                                         help="Current available modes: vae, pln")
+                                                       dest="model",
+                                                       help="Current available modes: vae, pln")
+    compress_subparsers.required = True
     
     # ========================================================================
     # Decompress mode
     # ========================================================================
+    decompress_mode = subparsers.add_parser("decompress",
+                                            formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+                                            description="Compress using a trained model")
+    
+    decompress_mode.add_argument("--comp_file", required=True,
+                                 help="File to compress")
+    decompress_mode.add_argument("--output_file", required=True,
+                                 help="Output file")
+    
+    decompress_subparsers = decompress_mode.add_subparsers(title="model",
+                                                           dest="model",
+                                                           help="Current available modes: vae, pln")
+    decompress_subparsers.required = True
     
     # ========================================================================
     # Add model specific stuff to each subparser
     # ========================================================================
     
-    for subpars in [train_subparsers, compress_subparsers]:
+    for subpars in [train_subparsers, compress_subparsers, decompress_subparsers]:
         vae_model_parser = subpars.add_parser("vae",
                                                 formatter_class=argparse.ArgumentDefaultsHelpFormatter,
                                                 description="Train a VAE")
@@ -331,6 +410,8 @@ def main(args):
         train(args)
     elif args.mode == "compress":
         compress(args)
+    elif args.mode == "decompress":
+        decompress(args)
 
 if __name__ == "__main__":
     app.run(main, flags_parser=parse_args)
