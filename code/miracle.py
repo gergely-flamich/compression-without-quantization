@@ -204,6 +204,24 @@ def compress(args):
         saver = tf.train.import_meta_graph(latest + '.meta', clear_devices=True)
         saver.restore(sess, latest)
         
+#         sess.run(reconstruction)
+        
+#         q1_loc = model.posterior_1.loc
+#         q1_scale = model.posterior_1.scale
+#         p1_loc = model.prior_1.loc
+#         p1_scale = model.prior_1.scale
+        
+#         q1_loc, q1_scale, p1_loc, p1_scale = sess.run([q1_loc, q1_scale, p1_loc, p1_scale])
+        
+#         model_dir = "/scratch/gf332/data/kodak_cwoq/"
+        
+#         np.save(model_dir + "pln_q1_loc.npy", q1_loc)
+#         np.save(model_dir + "pln_q1_scale.npy", q1_scale)
+#         np.save(model_dir + "pln_p1_loc.npy", p1_loc)
+#         np.save(model_dir + "pln_p1_scale.npy", p1_scale)
+        
+#         return
+        
         model.code_image_greedy(session=sess,
                                 image=image, 
                                 seed=args.seed, 
@@ -330,9 +348,9 @@ def parse_args(argv):
     
     compress_mode.add_argument("--seed", default=42, type=int,
                             help="Seed to use in the compressor")
-    compress_mode.add_argument("--n_steps", default=3, type=int,
+    compress_mode.add_argument("--n_steps", default=30, type=int,
                             help="Number of shards for the greedy sampler")
-    compress_mode.add_argument("--n_bits_per_step", default=3, type=int,
+    compress_mode.add_argument("--n_bits_per_step", default=14, type=int,
                             help="Number of bits used to code a sample from one shard in the greedy sampler")
     compress_mode.add_argument("--first_level_max_group_size_bits", default=12, type=int,
                             help="Number of bits used to code group sizes in the first-level sampler")
