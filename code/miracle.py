@@ -1,6 +1,8 @@
 import argparse
 import glob
 import os
+import json
+import time
 
 from tqdm import tqdm
 
@@ -275,6 +277,195 @@ def decompress(args):
         
         sess.run(write_png(args.output_file, reconstruction))
 
+        
+# ============================================================================
+# ============================================================================
+# Get compression stats for a whole dataset
+# ============================================================================
+# ============================================================================
+
+def compress_dataset(args,
+                     dataset_im_format="/kodim{:02d}.png",
+                     comp_file_format="/kodim{:02d}.miracle",
+                     n_images=24):
+    
+#     dataset = tf.data.Dataset.range(100)
+#     iterator = dataset.make_one_shot_iterator()
+#     next_element = iterator.get_next()
+
+#     with tf.Session() as sess:
+#         for i in range(100):
+#             value = sess.run(next_element)
+#             assert i == value
+    
+#     return
+    
+    reconstruction_root = args.reconstruction_root
+    reconstruction_subdir = args.reconstruction_subdir
+    
+    # ========================================================================
+    # Create datasets
+    # ========================================================================
+    
+    if args.theoretical:
+        reconstruction_subdir = "theoretical_" + reconstruction_subdir
+
+    reconstruction_path = reconstruction_root + "/" + reconstruction_subdir
+
+    if not os.path.exists(reconstruction_path):
+        print("Creating reconstruction directory " + reconstruction_path)
+
+        os.makedirs(reconstruction_path)
+
+    # Create lists of paths for every image in the dataset
+    dataset_im_paths = [args.dataset_path + "/" + dataset_im_format.format(i) 
+                      for i in range(1, n_images + 1)]
+
+    reconstruction_im_paths = [reconstruction_path + "/" + dataset_im_format.format(i) 
+                               for i in range(1, n_images + 1)]
+
+    comp_file_paths = [reconstruction_path + "/" + comp_file_format.format(i) 
+                       for i in range(1, n_images + 1)]
+
+    # Load in the dataset
+    if not dataset_im_paths:
+        raise RuntimeError("No training images found at '{}'.".format(args.dataset_path ))
+
+    paths_ds = tf.data.Dataset.from_tensor_slices(dataset_im_paths)
+    image_ds = paths_ds.map(
+        read_png, num_parallel_calls=16)
+    image_ds = image_ds.prefetch(32)
+    
+    image = image_ds.make_one_shot_iterator().get_next()
+    # ========================================================================
+    # Reload model
+    # ========================================================================
+    
+    if args.model == "pln":
+        model = ProbabilisticLadderNetwork(first_level_filters=args.filters1,
+                                           second_level_filters=args.filters2,
+                                           first_level_latent_channels=args.latent_channels1,
+                                           second_level_latent_channels=args.latent_channels2,
+                                           likelihood="gaussian", # These doesn't matter for compression
+                                           learn_gamma=True)
+        
+    elif args.model == "vae":
+        model = VariationalAutoEncoder(num_filters=args.filters,
+                                       num_latent_channels=args.latent_channels,
+                                       likelihood="gaussian",
+                                       learn_gamma=True)
+        
+        
+    reconstruction = model(tf.zeros((1, 256, 256, 3)))
+        
+    with tf.Session() as sess:
+        # Load the latest model checkpoint, get the compressed string and the tensor
+        # shapes.
+        
+        latest = tf.train.latest_checkpoint(checkpoint_dir=args.model_dir)
+        saver = tf.train.import_meta_graph(latest + '.meta', clear_devices=True)
+        saver.restore(sess, latest)
+        
+        next_image = image_ds.make_one_shot_iterator().get_next()
+
+        next_image = tf.expand_dims(image, 0)
+        next_image.set_shape([1, None, None, 3])
+
+        for i in range(n_images):
+            dataset_im_name = dataset_im_format.format(i + 1)
+            stats_path = reconstruction_root + "/stats.json"
+            
+            image = sess.run(next_image)
+
+            # Everything is sampled from the true posterior
+            if args.theoretical:
+                reconstruction = sess.run(model(image))
+                
+                summaries = {}
+                
+                encoding_time = -1
+                decoding_time = -1
+                
+                total_kl = sess.run(tf.reduce_sum(model.first_level_kl) + tf.reduce_sum(model.second_level_kl))
+                theoretical_byte_size = (total_kl + 2 * np.log(total_kl + 1)) / np.log(2)
+
+                image_shape = image.shape
+
+                bpp = theoretical_byte_size / (image_shape[1] * image_shape[2]) 
+                
+                summaries = {"bpp": float(bpp),
+                             "encoding_time": encoding_time,
+                             "decoding_time": decoding_time}
+
+            # Non-theoretical reconstruction
+            else:
+                if os.path.exists(comp_file_paths[i]):
+                    print(comp_file_paths[i] + " already exists, skipping coding.")
+
+                else:
+
+                    start_time = time.time()
+                    _, summaries = model.code_image_greedy(session=sess,
+                                                        image=image, 
+                                                        seed=args.seed, 
+                                                        n_steps=args.n_steps,
+                                                        n_bits_per_step=args.n_bits_per_step,
+                                                        comp_file_path=comp_file_paths[i],
+                                                        first_level_max_group_size_bits=args.first_level_max_group_size_bits,
+                                                        use_importance_sampling=True,
+                                                        second_level_n_bits_per_group=args.second_level_n_bits_per_group,
+                                                        second_level_max_group_size_bits=args.second_level_max_group_size_bits,
+                                                        second_level_dim_kl_bit_limit=args.second_level_dim_kl_bit_limit,
+                                                        outlier_index_bytes=args.outlier_index_bytes,
+                                                        outlier_sample_bytes=args.outlier_sample_bytes,
+                                                        verbose=args.verbose)
+
+                    encoding_time = time.time() - start_time
+
+                if os.path.exists(reconstruction_im_paths[i]):
+                    print(reconstruction_im_paths[i] + " already exists, skipping reconstruction.")
+
+                else:
+                    start_time = time.time()
+                    reconstruction = model.decode_image_greedy(session=sess,
+                                                             comp_file_path=comp_file_paths[i],
+                                                             verbose=args.verbose,
+                                                             rho=1.)
+                    decoding_time = time.time() - start_time
+                    print("Writing " + reconstruction_im_paths[i])
+
+            if args.theoretical or not os.path.exists(reconstruction_im_paths[i]):
+                ms_ssim = tf.image.ssim_multiscale(image, reconstruction, max_val=1.0)
+                psnr = tf.image.psnr(image, reconstruction, max_val=1.0)    
+
+                ms_ssim, psnr = sess.run([ms_ssim, psnr])
+
+                if not os.path.exists(reconstruction_im_paths[i]):
+                    sess.run(write_png(reconstruction_im_paths[i], tf.squeeze(reconstruction)))
+
+                summaries["image_shape"] = summaries["image_shape"].tolist()
+                summaries["encoding_time"] = encoding_time
+                summaries["decoding_time"] = decoding_time
+                summaries["total_time"] = encoding_time + decoding_time
+                summaries["ms_ssim"] = float(ms_ssim)
+                summaries["psnr"] = float(psnr)
+
+                print(summaries)
+
+                if os.path.exists(stats_path):
+                    with open(stats_path, "r") as stats_fp:
+                        stats = json.load(stats_fp)
+                else:
+                    stats = {}
+
+                if dataset_im_name not in stats:
+                    stats[dataset_im_name] = {}
+
+                with open(stats_path, "w") as stats_fp:
+                    stats[dataset_im_name][reconstruction_subdir] = summaries
+
+                    json.dump(stats, stats_fp)
+        
 # ============================================================================
 # ============================================================================
 # Plumbing
@@ -388,10 +579,51 @@ def parse_args(argv):
     decompress_subparsers.required = True
     
     # ========================================================================
+    # Compression statistics mode
+    # ========================================================================
+    compress_ds_mode = subparsers.add_parser("compress_ds",
+                                           formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+                                           description="Compress a whole dataset using a trained model")
+    
+    compress_ds_mode.add_argument("--dataset_path", required=True,
+                               help="Path to compress dataset to compress")
+    compress_ds_mode.add_argument("--reconstruction_subdir", required=True,
+                               help="Subdirectory to save files in")
+    compress_ds_mode.add_argument("--reconstruction_root", required=False,
+                                  default="/scratch/gf332/data/kodak_cwoq/",
+                                  help="Reconstruction root directory, for grouping stuff together")
+    compress_ds_mode.add_argument("--theoretical", action="store_true", default=False,
+                                 help="Save stats for the theoretical optimal compression quality and size, or actual.")
+    
+    compress_ds_mode.add_argument("--seed", default=42, type=int,
+                            help="Seed to use in the compressor")
+    compress_ds_mode.add_argument("--n_steps", default=30, type=int,
+                            help="Number of shards for the greedy sampler")
+    compress_ds_mode.add_argument("--n_bits_per_step", default=14, type=int,
+                            help="Number of bits used to code a sample from one shard in the greedy sampler")
+    compress_ds_mode.add_argument("--first_level_max_group_size_bits", default=12, type=int,
+                            help="Number of bits used to code group sizes in the first-level sampler")
+    compress_ds_mode.add_argument("--second_level_n_bits_per_group", default=20, type=int,
+                            help="Maximum total group KL in bits in the second-level sampler")
+    compress_ds_mode.add_argument("--second_level_max_group_size_bits", default=4, type=int,
+                            help="The number of bits used to code group sizes in the second-level sampler")
+    compress_ds_mode.add_argument("--second_level_dim_kl_bit_limit", default=12, type=int,
+                            help="Maximum KL of a single dimension before it is deemed an outlier in the second-level sampler")
+    compress_ds_mode.add_argument("--outlier_index_bytes", default=2, type=int,
+                            help="Bytes dedicated to coding the outliers' indices in the second-level sampler")
+    compress_ds_mode.add_argument("--outlier_sample_bytes", default=3, type=int,
+                            help="Bytes dedicated to coding the outlier samples in the second-level sampler")
+
+    compress_ds_subparsers = compress_ds_mode.add_subparsers(title="model",
+                                                           dest="model",
+                                                           help="Current available modes: vae, pln")
+    compress_ds_subparsers.required = True
+    
+    # ========================================================================
     # Add model specific stuff to each subparser
     # ========================================================================
     
-    for subpars in [train_subparsers, compress_subparsers, decompress_subparsers]:
+    for subpars in [train_subparsers, compress_subparsers, decompress_subparsers, compress_ds_subparsers]:
         vae_model_parser = subpars.add_parser("vae",
                                                 formatter_class=argparse.ArgumentDefaultsHelpFormatter,
                                                 description="Train a VAE")
@@ -430,6 +662,8 @@ def main(args):
         compress(args)
     elif args.mode == "decompress":
         decompress(args)
+    elif args.mode == "compress_ds":
+        compress_dataset(args)
 
 if __name__ == "__main__":
     app.run(main, flags_parser=parse_args)
