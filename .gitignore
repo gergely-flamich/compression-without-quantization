@@ -8,6 +8,8 @@ bls2017.py
 bmshj2018.py
 thesis_code
 
+scratch.ipynb
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
