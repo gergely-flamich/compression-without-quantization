@@ -289,17 +289,6 @@ def compress_dataset(args,
                      comp_file_format="/kodim{:02d}.miracle",
                      n_images=24):
     
-#     dataset = tf.data.Dataset.range(100)
-#     iterator = dataset.make_one_shot_iterator()
-#     next_element = iterator.get_next()
-
-#     with tf.Session() as sess:
-#         for i in range(100):
-#             value = sess.run(next_element)
-#             assert i == value
-    
-#     return
-    
     reconstruction_root = args.reconstruction_root
     reconstruction_subdir = args.reconstruction_subdir
     
@@ -421,6 +410,8 @@ def compress_dataset(args,
                                                         verbose=args.verbose)
 
                     encoding_time = time.time() - start_time
+                    
+                    summaries["image_shape"] = summaries["image_shape"].tolist()
 
                 if os.path.exists(reconstruction_im_paths[i]):
                     print(reconstruction_im_paths[i] + " already exists, skipping reconstruction.")
@@ -443,7 +434,7 @@ def compress_dataset(args,
                 if not os.path.exists(reconstruction_im_paths[i]):
                     sess.run(write_png(reconstruction_im_paths[i], tf.squeeze(reconstruction)))
 
-                summaries["image_shape"] = summaries["image_shape"].tolist()
+
                 summaries["encoding_time"] = encoding_time
                 summaries["decoding_time"] = decoding_time
                 summaries["total_time"] = encoding_time + decoding_time

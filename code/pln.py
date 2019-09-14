@@ -241,7 +241,7 @@ class ProbabilisticLadderNetwork(tfk.Model):
             outlier_extras2 = list(map(lambda x: x.reshape([-1]), outlier_extras2))
             
         else:
-            sample2, code2, group_indices2 = code_grouped_greedy_sample_(sess=session,
+            sample2, code2, group_indices2 = code_grouped_greedy_sample(sess=session,
                                                                         target=self.posterior_2, 
                                                                         proposal=self.prior_2, 
                                                                         n_bits_per_step=n_bits_per_step, 

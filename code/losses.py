@@ -28,4 +28,4 @@ class MixPseudo():
         
     def log_prob(self, inputs):
         
-        return self.alpha * self.ssim.log_prob(inputs) + (1 - self.alpha) * self.laplace.log_prob(inputs)
+        return self.alpha * self.ssim.log_prob(inputs) + (1 - self.alpha) * tf.reduce_mean(self.laplace.log_prob(inputs))
