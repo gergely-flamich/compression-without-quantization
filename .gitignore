@@ -2,6 +2,11 @@
 papers/
 compression_venv/
 compression-venv/
+*.png
+*.c
+*.npy
+*.miracle
+
 
 # Scratch file
 bls2017.py

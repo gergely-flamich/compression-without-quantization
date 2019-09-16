@@ -9,6 +9,8 @@ from tqdm import tqdm
 from absl import app
 from absl.flags import argparse_flags
 
+from miracle_arguments import parse_args
+
 from pln import ProbabilisticLadderNetwork
 from vae import VariationalAutoEncoder
 
@@ -215,7 +217,7 @@ def compress(args):
         
 #         q1_loc, q1_scale, p1_loc, p1_scale = sess.run([q1_loc, q1_scale, p1_loc, p1_scale])
         
-#         model_dir = "/scratch/gf332/data/kodak_cwoq/"
+#         model_dir = "/scratch/gf332/data/kodak_cwoq_distributions/"
         
 #         np.save(model_dir + "pln_q1_loc.npy", q1_loc)
 #         np.save(model_dir + "pln_q1_scale.npy", q1_scale)
@@ -227,16 +229,26 @@ def compress(args):
         model.code_image_greedy(session=sess,
                                 image=image, 
                                 seed=args.seed, 
+                                
                                 n_steps=args.n_steps,
                                 n_bits_per_step=args.n_bits_per_step,
+                                greedy_max_group_size_bits=args.greedy_max_group_size_bits,
+                                
                                 comp_file_path=args.output_file,
-                                first_level_max_group_size_bits=args.first_level_max_group_size_bits,
-                                use_importance_sampling=True,
+                                
+                                use_importance_sampling=args.use_importance_sampling,
+                                
                                 second_level_n_bits_per_group=args.second_level_n_bits_per_group,
                                 second_level_max_group_size_bits=args.second_level_max_group_size_bits,
                                 second_level_dim_kl_bit_limit=args.second_level_dim_kl_bit_limit,
+                                
+                                first_level_n_bits_per_group=args.first_level_n_bits_per_group,
+                                first_level_max_group_size_bits=args.first_level_max_group_size_bits,
+                                first_level_dim_kl_bit_limit=args.first_level_dim_kl_bit_limit,
+                                
                                 outlier_index_bytes=args.outlier_index_bytes,
                                 outlier_sample_bytes=args.outlier_sample_bytes,
+                                
                                 verbose=args.verbose)
 
         
@@ -273,6 +285,7 @@ def decompress(args):
         
         reconstruction = model.decode_image_greedy(session=sess,
                                                   comp_file_path=args.comp_file,
+                                                   use_importance_sampling=args.use_importance_sampling,
                                                   verbose=args.verbose)
         
         sess.run(write_png(args.output_file, reconstruction))
@@ -397,16 +410,25 @@ def compress_dataset(args,
                     _, summaries = model.code_image_greedy(session=sess,
                                                         image=image, 
                                                         seed=args.seed, 
+                                                           
                                                         n_steps=args.n_steps,
                                                         n_bits_per_step=args.n_bits_per_step,
+                                                        greedy_max_group_size_bits=args.greedy_max_group_size_bits,
                                                         comp_file_path=comp_file_paths[i],
-                                                        first_level_max_group_size_bits=args.first_level_max_group_size_bits,
-                                                        use_importance_sampling=True,
+                                                           
+                                                        use_importance_sampling=args.use_importance_sampling,
+                                                           
                                                         second_level_n_bits_per_group=args.second_level_n_bits_per_group,
                                                         second_level_max_group_size_bits=args.second_level_max_group_size_bits,
                                                         second_level_dim_kl_bit_limit=args.second_level_dim_kl_bit_limit,
+                                                           
+                                                        first_level_n_bits_per_group=args.first_level_n_bits_per_group,
+                                                        first_level_max_group_size_bits=args.first_level_max_group_size_bits,
+                                                        first_level_dim_kl_bit_limit=args.first_level_dim_kl_bit_limit,
+                                                           
                                                         outlier_index_bytes=args.outlier_index_bytes,
                                                         outlier_sample_bytes=args.outlier_sample_bytes,
+                                                           
                                                         verbose=args.verbose)
 
                     encoding_time = time.time() - start_time
@@ -456,196 +478,137 @@ def compress_dataset(args,
                     stats[dataset_im_name][reconstruction_subdir] = summaries
 
                     json.dump(stats, stats_fp)
+                    
+# ============================================================================
+# ============================================================================
+# Build empirical coding distribution for importance group samples
+# ============================================================================
+# ============================================================================     
+def build_empirical_dists(args,
+                          image_regex="*.png"):
+    
+    dataset_im_paths = glob.glob(args.data_path + "/" + image_regex)
+    
+    paths_ds = tf.data.Dataset.from_tensor_slices(dataset_im_paths)
+    image_ds = paths_ds.map(
+        read_png, num_parallel_calls=16)
+    image_ds = image_ds.prefetch(32)
+    
+    image = image_ds.make_one_shot_iterator().get_next()
+    next_image = tf.expand_dims(image, 0)
+    next_image.set_shape([1, None, None, 3])
+    
+    # ========================================================================
+    # Reload model
+    # ========================================================================
+    
+    if args.model == "pln":
+        model = ProbabilisticLadderNetwork(first_level_filters=args.filters1,
+                                           second_level_filters=args.filters2,
+                                           first_level_latent_channels=args.latent_channels1,
+                                           second_level_latent_channels=args.latent_channels2,
+                                           likelihood="gaussian", # These doesn't matter for compression
+                                           learn_gamma=True)
         
-# ============================================================================
-# ============================================================================
-# Plumbing
-# ============================================================================
-# ============================================================================
-
-
-def parse_args(argv):
-    parser = argparse_flags.ArgumentParser(
-        formatter_class=argparse.ArgumentDefaultsHelpFormatter)
-    
-    parser.add_argument("--verbose", "-V", action="store_true",
-                        help="Turn logging on")
-    
-    parser.add_argument("--model_dir", "-M", required=True,
-                        help="Model directory where we will save the checkpoints and Tensorboard logs")
-    
-    subparsers = parser.add_subparsers(title="mode",
-                                       dest="mode",
-                                       help="Current available modes: train")
-    
-    # ========================================================================
-    # Training mode
-    # ========================================================================
-    train_mode = subparsers.add_parser("train",
-                                       formatter_class=argparse.ArgumentDefaultsHelpFormatter,
-                                       description="Train a new model")
-    
-    train_mode.add_argument("--data_path", "-D",
-                            help="Path to PNG dataset")
-    train_mode.add_argument("--patch_size", default=256, type=int,
-                            help="Square patch size for the random crops")
-    train_mode.add_argument("--batch_size", default=8, type=int,
-                            help="Number of image patches per training batch for SGD")
-    train_mode.add_argument("--preprocess_threads", default=16, type=int,
-                            help="Number of threads to use to process the dataset")
-    train_mode.add_argument("--checkpoint_freq", default=600, type=int,
-                            help="Checkpointing frequency (seconds)")
-    train_mode.add_argument("--log_freq", default=30, type=int,
-                            help="Logging frequency (seconds)")
-    train_mode.add_argument("--train_steps", default=200000, type=int,
-                            help="Number of training iterations")
-    train_mode.add_argument("--likelihood", default="gaussian",
-                            help="Gaussian or Laplace")
-    train_mode.add_argument("--beta", default=10, type=float,
-                            help="KL coefficient in the training loss")
-    train_mode.add_argument("--learning_rate", default=0.001, type=float,
-                            help="Learning rate")
-    train_mode.add_argument("--warmup_steps", default=40000, type=int,
-                            help="Number of warmup steps for the KL coefficient")
-    train_mode.add_argument("--learn_gamma", action="store_true", default=False,
-                            help="Turns on the gamma learning technique suggested by Dai and Wipf")
-    
-    train_subparsers = train_mode.add_subparsers(title="model",
-                                                 dest="model",
-                                                 help="Current available modes: vae, pln")
-    
-    train_subparsers.required = True
-    
-    # ========================================================================
-    # Compression mode
-    # ========================================================================
-    compress_mode = subparsers.add_parser("compress",
-                                           formatter_class=argparse.ArgumentDefaultsHelpFormatter,
-                                           description="Compress using a trained model")
-    
-    compress_mode.add_argument("--input_file", required=True,
-                               help="File to compress")
-    compress_mode.add_argument("--output_file", required=True,
-                               help="Output file")
-    
-    compress_mode.add_argument("--seed", default=42, type=int,
-                            help="Seed to use in the compressor")
-    compress_mode.add_argument("--n_steps", default=30, type=int,
-                            help="Number of shards for the greedy sampler")
-    compress_mode.add_argument("--n_bits_per_step", default=14, type=int,
-                            help="Number of bits used to code a sample from one shard in the greedy sampler")
-    compress_mode.add_argument("--first_level_max_group_size_bits", default=12, type=int,
-                            help="Number of bits used to code group sizes in the first-level sampler")
-    compress_mode.add_argument("--second_level_n_bits_per_group", default=20, type=int,
-                            help="Maximum total group KL in bits in the second-level sampler")
-    compress_mode.add_argument("--second_level_max_group_size_bits", default=4, type=int,
-                            help="The number of bits used to code group sizes in the second-level sampler")
-    compress_mode.add_argument("--second_level_dim_kl_bit_limit", default=12, type=int,
-                            help="Maximum KL of a single dimension before it is deemed an outlier in the second-level sampler")
-    compress_mode.add_argument("--outlier_index_bytes", default=2, type=int,
-                            help="Bytes dedicated to coding the outliers' indices in the second-level sampler")
-    compress_mode.add_argument("--outlier_sample_bytes", default=3, type=int,
-                            help="Bytes dedicated to coding the outlier samples in the second-level sampler")
-
-    compress_subparsers = compress_mode.add_subparsers(title="model",
-                                                       dest="model",
-                                                       help="Current available modes: vae, pln")
-    compress_subparsers.required = True
-    
-    # ========================================================================
-    # Decompress mode
-    # ========================================================================
-    decompress_mode = subparsers.add_parser("decompress",
-                                            formatter_class=argparse.ArgumentDefaultsHelpFormatter,
-                                            description="Compress using a trained model")
-    
-    decompress_mode.add_argument("--comp_file", required=True,
-                                 help="File to compress")
-    decompress_mode.add_argument("--output_file", required=True,
-                                 help="Output file")
-    
-    decompress_subparsers = decompress_mode.add_subparsers(title="model",
-                                                           dest="model",
-                                                           help="Current available modes: vae, pln")
-    decompress_subparsers.required = True
-    
-    # ========================================================================
-    # Compression statistics mode
-    # ========================================================================
-    compress_ds_mode = subparsers.add_parser("compress_ds",
-                                           formatter_class=argparse.ArgumentDefaultsHelpFormatter,
-                                           description="Compress a whole dataset using a trained model")
-    
-    compress_ds_mode.add_argument("--dataset_path", required=True,
-                               help="Path to compress dataset to compress")
-    compress_ds_mode.add_argument("--reconstruction_subdir", required=True,
-                               help="Subdirectory to save files in")
-    compress_ds_mode.add_argument("--reconstruction_root", required=False,
-                                  default="/scratch/gf332/data/kodak_cwoq/",
-                                  help="Reconstruction root directory, for grouping stuff together")
-    compress_ds_mode.add_argument("--theoretical", action="store_true", default=False,
-                                 help="Save stats for the theoretical optimal compression quality and size, or actual.")
-    
-    compress_ds_mode.add_argument("--seed", default=42, type=int,
-                            help="Seed to use in the compressor")
-    compress_ds_mode.add_argument("--n_steps", default=30, type=int,
-                            help="Number of shards for the greedy sampler")
-    compress_ds_mode.add_argument("--n_bits_per_step", default=14, type=int,
-                            help="Number of bits used to code a sample from one shard in the greedy sampler")
-    compress_ds_mode.add_argument("--first_level_max_group_size_bits", default=12, type=int,
-                            help="Number of bits used to code group sizes in the first-level sampler")
-    compress_ds_mode.add_argument("--second_level_n_bits_per_group", default=20, type=int,
-                            help="Maximum total group KL in bits in the second-level sampler")
-    compress_ds_mode.add_argument("--second_level_max_group_size_bits", default=4, type=int,
-                            help="The number of bits used to code group sizes in the second-level sampler")
-    compress_ds_mode.add_argument("--second_level_dim_kl_bit_limit", default=12, type=int,
-                            help="Maximum KL of a single dimension before it is deemed an outlier in the second-level sampler")
-    compress_ds_mode.add_argument("--outlier_index_bytes", default=2, type=int,
-                            help="Bytes dedicated to coding the outliers' indices in the second-level sampler")
-    compress_ds_mode.add_argument("--outlier_sample_bytes", default=3, type=int,
-                            help="Bytes dedicated to coding the outlier samples in the second-level sampler")
-
-    compress_ds_subparsers = compress_ds_mode.add_subparsers(title="model",
-                                                           dest="model",
-                                                           help="Current available modes: vae, pln")
-    compress_ds_subparsers.required = True
-    
-    # ========================================================================
-    # Add model specific stuff to each subparser
-    # ========================================================================
-    
-    for subpars in [train_subparsers, compress_subparsers, decompress_subparsers, compress_ds_subparsers]:
-        vae_model_parser = subpars.add_parser("vae",
-                                                formatter_class=argparse.ArgumentDefaultsHelpFormatter,
-                                                description="Train a VAE")
-
-        vae_model_parser.add_argument("--filters", default=128, type=int,
-                                        help="Number of filters for the transforms")
-        vae_model_parser.add_argument("--latent_channels", default=128, type=int,
-                                        help="Number of channels in the latent space")
-        # Train the PLN
-        pln_model_parser = subpars.add_parser("pln",
-                                                formatter_class=argparse.ArgumentDefaultsHelpFormatter,
-                                                description="Train a PLN")
-
-        pln_model_parser.add_argument("--filters1", default=196, type=int,
-                                        help="Number of filters for the first-level transforms")
-        pln_model_parser.add_argument("--filters2", default=128, type=int,
-                                        help="Number of filters for the second-level transforms")
-        pln_model_parser.add_argument("--latent_channels1", default=128, type=int,
-                                        help="Number of channels in the first-level latent space")
-        pln_model_parser.add_argument("--latent_channels2", default=24, type=int,
-                                        help="Number of channels in the second-level latent space")
-    
-    # Parse arguments
-    args = parser.parse_args(argv[1:])
-    if args.mode is None:
-        parser.print_usage()
-        sys.exit(2)
+    elif args.model == "vae":
+        model = VariationalAutoEncoder(num_filters=args.filters,
+                                       num_latent_channels=args.latent_channels,
+                                       likelihood="gaussian",
+                                       learn_gamma=True)
         
-    return args
+        
+    reconstruction = model(tf.zeros((1, 256, 256, 3)))
+        
+    with tf.Session() as sess:
+        # Load the latest model checkpoint, get the compressed string and the tensor
+        # shapes.
+        
+        latest = tf.train.latest_checkpoint(checkpoint_dir=args.model_dir)
+        saver = tf.train.import_meta_graph(latest + '.meta', clear_devices=True)
+        saver.restore(sess, latest)
+        
+        # The +1 is for the EOF symbol
+        group_sizes2 = np.zeros(1 + 2**args.second_level_max_group_size_bits, dtype=np.int64)
+        group_sizes1 = np.zeros(1 + 2**args.first_level_max_group_size_bits, dtype=np.int64)
+        
+        for i in range(len(dataset_im_paths)):
+            
+            image = sess.run(next_image)
 
+            # Get the group indices on the second level
+            gi2 = model.code_image_greedy(session=sess,
+                                        image=image, 
 
+                                        seed=args.seed, 
+
+                                        n_steps=args.n_steps,
+                                        n_bits_per_step=args.n_bits_per_step,
+                                        greedy_max_group_size_bits=args.greedy_max_group_size_bits,
+
+                                        comp_file_path=None,
+
+                                        use_importance_sampling=True,
+
+                                        second_level_n_bits_per_group=args.second_level_n_bits_per_group,
+                                        second_level_max_group_size_bits=args.second_level_max_group_size_bits,
+                                        second_level_dim_kl_bit_limit=args.second_level_dim_kl_bit_limit,
+
+                                        first_level_n_bits_per_group=args.first_level_n_bits_per_group,
+                                        first_level_max_group_size_bits=args.first_level_max_group_size_bits,
+                                        first_level_dim_kl_bit_limit=args.first_level_dim_kl_bit_limit,
+
+                                        outlier_index_bytes=args.outlier_index_bytes,
+                                        outlier_sample_bytes=args.outlier_sample_bytes,
+
+                                        return_second_level_group_sizes=True,
+
+                                        verbose=args.verbose)
+            
+            group_differences2 = gi2[1:] - gi2[:-1]   
+            unique, counts = np.unique(group_differences2, return_counts=True)
+            
+            group_sizes2[unique] += counts
+            group_sizes2[0] += 1
+            
+            # Get the group indices on the first level
+            gi1 = model.code_image_greedy(session=sess,
+                                        image=image, 
+
+                                        seed=args.seed, 
+
+                                        n_steps=args.n_steps,
+                                        n_bits_per_step=args.n_bits_per_step,
+                                        greedy_max_group_size_bits=args.greedy_max_group_size_bits,
+
+                                        comp_file_path=None,
+
+                                        use_importance_sampling=True,
+
+                                        second_level_n_bits_per_group=args.second_level_n_bits_per_group,
+                                        second_level_max_group_size_bits=args.second_level_max_group_size_bits,
+                                        second_level_dim_kl_bit_limit=args.second_level_dim_kl_bit_limit,
+
+                                        first_level_n_bits_per_group=args.first_level_n_bits_per_group,
+                                        first_level_max_group_size_bits=args.first_level_max_group_size_bits,
+                                        first_level_dim_kl_bit_limit=args.first_level_dim_kl_bit_limit,
+
+                                        outlier_index_bytes=args.outlier_index_bytes,
+                                        outlier_sample_bytes=args.outlier_sample_bytes,
+
+                                        return_first_level_group_sizes=True,
+
+                                        verbose=args.verbose)
+            
+            group_differences1 = gi1[1:] - gi1[:-1]
+            
+            unique, counts = np.unique(group_differences1, return_counts=True)
+            
+            group_sizes1[unique] += counts
+            group_sizes1[0] += 1
+            
+            np.save(args.output_path + "_2.npy", group_sizes2)
+            np.save(args.output_path + "_1.npy", group_sizes1)
+        
 def main(args):
     if args.mode == "train":
         train(args)
@@ -655,6 +618,8 @@ def main(args):
         decompress(args)
     elif args.mode == "compress_ds":
         compress_dataset(args)
+    elif args.mode == "build_dists":
+        build_empirical_dists(args)
 
 if __name__ == "__main__":
     app.run(main, flags_parser=parse_args)

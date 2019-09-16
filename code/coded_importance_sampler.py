@@ -93,7 +93,8 @@ def code_grouped_importance_sample(sess,
                                     seed,
                                     n_bits_per_group,
                                     max_group_size_bits=4,
-                                    dim_kl_bit_limit=12):
+                                    dim_kl_bit_limit=12,
+                                    return_group_indices_only=False):
     
     # Make sure the distributions have the correct type
     if target.dtype is not tf.float32:
@@ -131,7 +132,7 @@ def code_grouped_importance_sample(sess,
     # Halve precision
     outlier_samples = tfq.quantize(outlier_samples, -30, 30, tf.quint16).output
 
-    outlier_extras = (outlier_indices, outlier_samples)
+    outlier_extras = (tf.reshape(outlier_indices, [-1]), outlier_samples)
     
     kl_divergences = tf.reshape(
         tfd.kl_divergence(tfd.Normal(loc=t_loc, scale=t_scale), 
@@ -161,8 +162,8 @@ def code_grouped_importance_sample(sess,
 
         group_bits = np.log(current_group_size + 1) / np.log(2)
         
-        if group_bits >= max_group_size_bits or \
-           current_group_kl + kl_divs[idx] >= n_nats_per_group or \
+        if group_bits > max_group_size_bits or \
+           current_group_kl + kl_divs[idx] > n_nats_per_group or \
            idx == num_dimensions - 1:
 
             group_start_indices.append(idx)
@@ -176,13 +177,18 @@ def code_grouped_importance_sample(sess,
             current_group_size += 1
         
     print("Maximum group KL: {:.3f}".format(np.max(group_kls)))
+    
+    group_start_indices += [num_dimensions] 
+    group_start_indices = np.array(group_start_indices)
+    
+    if return_group_indices_only:
+        return group_start_indices, group_kls
+    
     # ====================================================================== 
     # Sample each group
     # ====================================================================== 
     
     results = []
-    
-    group_start_indices += [num_dimensions] 
     
     # Get the importance sampling op before looping it to avoid graph construction cost
     # The length is variable, hence the shape is [None]
@@ -283,7 +289,7 @@ def decode_grouped_importance_sample(sess,
         })
         
         samples.append(samp)
-        
+
     sample = tf.concat(samples, axis=1)
     
     # Rescale the sample

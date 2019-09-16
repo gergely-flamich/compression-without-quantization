@@ -15,7 +15,25 @@ from transforms import AnalysisTransform_1, AnalysisTransform_2, SynthesisTransf
 from coded_greedy_sampler import code_grouped_greedy_sample, decode_grouped_greedy_sample
 from coded_importance_sampler import code_grouped_importance_sample, decode_grouped_importance_sample
 
+from coding import ArithmeticCoder
+
 from binary_io import write_bin_code, read_bin_code
+
+def quantize_image(image):
+    """
+    Taken from Balle's implementation
+    """
+    image = tf.round(image * 255)
+    image = tf.saturate_cast(image, tf.uint8)
+    return image
+
+def write_png(filename, image):
+    """
+    Saves an image to a PNG file. Taken from Balle's implementation
+    """
+    image = quantize_image(image)
+    string = tf.image.encode_png(image)
+    return tf.write_file(filename, string)
 
 # =====================================================================
 # =====================================================================
@@ -194,20 +212,36 @@ class ProbabilisticLadderNetwork(tfk.Model):
                           session,
                           image, 
                           seed, 
+                          
+                          # Greedy sampling parameters
                           n_steps,
                           n_bits_per_step,
+                          greedy_max_group_size_bits,
+                          
                           comp_file_path,
+                          
                           backfitting_steps_level_1=0,
                           backfitting_steps_level_2=0,
                           use_log_prob=False,
                           rho=1.,
-                          use_importance_sampling=True,
-                          first_level_max_group_size_bits=12,
+                          use_importance_sampling=False,
+                          
+                          # Importance sampling parameters
                           second_level_n_bits_per_group=20,
                           second_level_max_group_size_bits=4,
                           second_level_dim_kl_bit_limit=12,
+                          first_level_n_bits_per_group=20,
+                          first_level_max_group_size_bits=3,
+                          first_level_dim_kl_bit_limit=12,
                           outlier_index_bytes=3,
                           outlier_sample_bytes=2,
+                          
+                          second_level_counts="/homes/gf332/compression-without-quantization/group_dists_2.npy",
+                          first_level_counts="/homes/gf332/compression-without-quantization/group_dists_1.npy",
+                          
+                          return_first_level_group_sizes=False,
+                          return_second_level_group_sizes=False,
+                          
                           verbose=False):
         
         # -------------------------------------------------------------------------------------
@@ -215,94 +249,140 @@ class ProbabilisticLadderNetwork(tfk.Model):
         # -------------------------------------------------------------------------------------
         
         if verbose: print("Calculating latent distributions for image...")
-        session.run(self.call(image))
+            
+        ops = [self.call(image), 
+               self.posterior_1.loc, 
+               self.posterior_1.scale,
+               self.posterior_2.loc, 
+               self.posterior_2.scale,
+               self.prior_2.loc, 
+               self.prior_2.scale]
         
-        image_shape, first_level_shape, second_level_shape = session.run([tf.shape(image),
-                                                                          tf.shape(self.posterior_1.loc), 
-                                                                          tf.shape(self.posterior_2.loc)])
+        im, q1_loc, q1_scale, q2_loc, q2_scale, p2_loc, p2_scale = session.run(ops)
+
+        q1 = tfd.Normal(loc=q1_loc, scale=q1_scale)
+        q2 = tfd.Normal(loc=q2_loc, scale=q2_scale)
+        p2 = tfd.Normal(loc=p2_loc, scale=p2_scale)
         
+        image_shape = list(im.shape)
+        first_level_shape = list(q1_loc.shape)
+        second_level_shape = list(q2_loc.shape)
+
         # -------------------------------------------------------------------------------------
         # Step 2: Create a coded sample of the latent space
         # -------------------------------------------------------------------------------------
         
         if verbose: print("Coding second level...")
             
-        if use_importance_sampling:
-            
-            sample2, code2, group_indices2, outlier_extras2 = code_grouped_importance_sample(
-                sess=session,
-                target=self.posterior_2,
-                proposal=self.prior_2, 
-                n_bits_per_group=second_level_n_bits_per_group, 
-                seed=seed, 
-                max_group_size_bits=second_level_max_group_size_bits,
-                dim_kl_bit_limit=second_level_dim_kl_bit_limit)
-            
-            outlier_extras2 = list(map(lambda x: x.reshape([-1]), outlier_extras2))
-            
-        else:
-            sample2, code2, group_indices2 = code_grouped_greedy_sample(sess=session,
-                                                                        target=self.posterior_2, 
-                                                                        proposal=self.prior_2, 
-                                                                        n_bits_per_step=n_bits_per_step, 
-                                                                        n_steps=n_steps, 
-                                                                        seed=seed, 
-                                                                        max_group_size_bits=second_level_max_group_size_bits,
-                                                                        adaptive=True,
-                                                                        backfitting_steps=backfitting_steps_level_2,
-                                                                        use_log_prob=use_log_prob,
-                                                                        rho=rho)
-            
-        # We will encode the group differences as this will cost us less
-        group_differences2 = [0]
+        res = code_grouped_importance_sample(sess=session,
+                                            target=q2,
+                                            proposal=p2, 
+                                            n_bits_per_group=second_level_n_bits_per_group, 
+                                            seed=seed, 
+                                            max_group_size_bits=second_level_max_group_size_bits,
+                                            dim_kl_bit_limit=second_level_dim_kl_bit_limit,
+                                            return_group_indices_only=return_second_level_group_sizes)
         
-        for i in range(1, len(group_indices2)):
-            group_differences2.append(group_indices2[i] - group_indices2[i - 1])
+        if return_second_level_group_sizes:
+            group_start_indices, group_kls = res
+            
+            return group_start_indices
+            
+        sample2, code2, group_indices2, outlier_extras2 = res
         
+        outlier_extras2 = list(map(lambda x: x.reshape([-1]), outlier_extras2))
+        
+        # The -1 at the end shifts the range of the group sizes to the 0 - 15 range from the 1 - 16 range
+        # such that it can be coded as usual
+        
+        group_differences2 = (group_indices2[1:] - group_indices2[:-1]) - 1
+        
+        group_indices2_ = [0]
+        
+        for i in range(0, len(group_differences2)):
+            # The +1 at the end shifts the group sizes back from the range 0 - 15 to the range 1 - 16.
+            group_indices2_.append(group_indices2_[i] + (group_differences2[i] + 1))
+         
         # We need to adjust the priors to the second stage sample
         latents = tf.reshape(sample2, second_level_shape)
-        session.run(self.synthesis_transform_2(latents))
         
-        self.prior_1 = self.synthesis_transform_2.prior
+        ops = [self.synthesis_transform_2(latents), 
+               self.synthesis_transform_2.loc, 
+               self.synthesis_transform_2.scale]
+        
+        _, p1_loc, p1_scale = session.run(ops)
+        
+        p1 = tfd.Normal(loc=p1_loc, scale=p1_scale)
         
         if verbose: print("Coding first level")
             
-        sample1, code1, group_indices1 = code_grouped_greedy_sample(sess=session,
-                                                                    target=self.posterior_1, 
-                                                                    proposal=self.prior_1, 
-                                                                    n_bits_per_step=n_bits_per_step, 
-                                                                    n_steps=n_steps, 
-                                                                    seed=seed, 
-                                                                    max_group_size_bits=first_level_max_group_size_bits,
-                                                                    backfitting_steps=backfitting_steps_level_1,
-                                                                    use_log_prob=use_log_prob,
-                                                                    adaptive=True)
+        if use_importance_sampling:
+            res = code_grouped_importance_sample(sess=session,
+                                                target=q1,
+                                                proposal=p1, 
+                                                n_bits_per_group=first_level_n_bits_per_group, 
+                                                seed=seed, 
+                                                max_group_size_bits=first_level_max_group_size_bits,
+                                                dim_kl_bit_limit=first_level_dim_kl_bit_limit,
+                                                return_group_indices_only=return_first_level_group_sizes)
+            
+            if return_first_level_group_sizes:
+                group_start_indices, group_kls = res
+
+                return group_start_indices
+            
+            sample1, code1, group_indices1, outlier_extras1 = res
+            
+        else:
+            sample1, code1, group_indices1 = code_grouped_greedy_sample(sess=session,
+                                                                        target=q1, 
+                                                                        proposal=p1, 
+                                                                        n_bits_per_step=n_bits_per_step, 
+                                                                        n_steps=n_steps, 
+                                                                        seed=seed, 
+                                                                        max_group_size_bits=greedy_max_group_size_bits,
+                                                                        backfitting_steps=backfitting_steps_level_1,
+                                                                        use_log_prob=use_log_prob,
+                                                                        adaptive=True)
         
+        np.save("/homes/gf332/compression-without-quantization/s1_cod.npy", sample1)
+                
         # We will encode the group differences as this will cost us less
-        group_differences1 = [0]
-        
-        for i in range(1, len(group_indices1)):
-            group_differences1.append(group_indices1[i] - group_indices1[i - 1])
-        
-        
-        bitcode = code1 + code2.decode("utf-8")
+        group_differences1 = group_indices1[1:] - group_indices1[:-1] - 1   
+
+        bitcode = code1.decode("utf-8") if use_importance_sampling else code1
+        bitcode += code2.decode("utf-8")
         # -------------------------------------------------------------------------------------
         # Step 3: Write the compressed file
         # -------------------------------------------------------------------------------------
         
-        extras = [seed, n_steps, n_bits_per_step] + \
-                 first_level_shape[1:3].tolist() + \
-                 second_level_shape[1:3].tolist()
+        extras = [seed, n_steps, n_bits_per_step, first_level_n_bits_per_group, second_level_n_bits_per_group] + \
+                 first_level_shape[1:3] + \
+                 second_level_shape[1:3]
         
         var_length_extras = [group_differences1, group_differences2]
         var_length_bits = [first_level_max_group_size_bits,  
                            second_level_max_group_size_bits]
         
-        if use_importance_sampling:
+        var_length_extras += outlier_extras2
+        var_length_bits += [ outlier_index_bytes * 8, outlier_sample_bytes * 8 ]
             
-            var_length_extras += outlier_extras2
+        if use_importance_sampling:
+
+            var_length_extras += outlier_extras1
             var_length_bits += [ outlier_index_bytes * 8, outlier_sample_bytes * 8 ]
-    
+            
+            
+        second_level_coder = ArithmeticCoder(np.load(second_level_counts), precision=32)
+        first_level_coder = ArithmeticCoder(np.load(first_level_counts), precision=32)
+        
+        code = first_level_coder.encode(group_differences1 + 1)
+        decompressed = first_level_coder.decode_fast(code)
+        
+        print("HAHAH: {}".format(np.all(decompressed == (group_differences1 + 1))))
+        print(decompressed[-10:])
+        print(group_differences1[-10:] + 1)
+        
         write_bin_code(bitcode, 
                        comp_file_path, 
                        extras=extras,
@@ -422,34 +502,36 @@ class ProbabilisticLadderNetwork(tfk.Model):
         
         # the extras are: seed, n_steps, n_bits_per_step and W x H of the two latent levels
         # var length extras are the two lists of group indices
-        num_var_length_extras = 2
+        # +2: outlier extras of the second level importance sampler
+        num_var_length_extras = 2 + 2
         
         if use_importance_sampling:
             num_var_length_extras += 2
         
         code, extras, var_length_extras = read_bin_code(comp_file_path, 
-                                                        num_extras=7, 
+                                                        num_extras=9, 
                                                         num_var_length_extras=num_var_length_extras)
         
         seed = extras[0]
         
         n_steps = extras[1]
         n_bits_per_step = extras[2]
+        first_level_n_bits_per_group = extras[3]
+        second_level_n_bits_per_group = extras[4]
         
         # Get shape information back
-        first_level_shape = [1] + extras[3:5] + [self.first_level_latent_channels]
-        second_level_shape = [1] + extras[5:] + [self.second_level_latent_channels]
+        first_level_shape = [1] + extras[5:7] + [self.first_level_latent_channels]
+        second_level_shape = [1] + extras[7:] + [self.second_level_latent_channels]
         
         # Total number of latents on levels
         num_first_level = np.prod(first_level_shape)
         num_second_level = np.prod(second_level_shape)
         
-        first_code_length = n_steps * n_bits_per_step * (len(var_length_extras[0]) - 1)
-        second_code_length = n_steps * n_bits_per_step * (len(var_length_extras[1]) - 1)
-        
+        first_code_length = first_level_n_bits_per_group * len(var_length_extras[0])
+        second_code_length = second_level_n_bits_per_group * len(var_length_extras[1])
+           
         code1 = code[:first_code_length]
         code2 = code[first_code_length:first_code_length + second_code_length]
-        
         # -------------------------------------------------------------------------------------
         # Step 2: Decode the samples
         # -------------------------------------------------------------------------------------
@@ -464,60 +546,69 @@ class ProbabilisticLadderNetwork(tfk.Model):
         
         group_indices2 = [0]
         
-        for i in range(1, len(group_differences2)):
-            group_indices2.append(group_indices2[i - 1] + group_differences2[i])
+        for i in range(0, len(group_differences2)):
+            # The +1 at the end shifts the group sizes back from the range 0 - 15 to the range 1 - 16.
+            group_indices2.append(group_indices2[i] + group_differences2[i] + 1)
+           
         
         print("Decoding second level")
-        if use_importance_sampling:
-            decoded_second_level = decode_grouped_importance_sample(sess=session,
-                                                                    bitcode=code2, 
-                                                                    group_start_indices=group_indices2[:-1],
-                                                                    proposal=proposal, 
-                                                                    n_bits_per_group=20,
-                                                                    seed=seed,
-                                                                    outlier_indices=var_length_extras[2],
-                                                                    outlier_samples=var_length_extras[3])
-        
-        else:
-            decoded_second_level = decode_grouped_greedy_sample(sess=session,
+        decoded_second_level = decode_grouped_importance_sample(sess=session,
                                                                 bitcode=code2, 
-                                                                group_start_indices=var_length_extras[1],
+                                                                group_start_indices=group_indices2[:-1],
                                                                 proposal=proposal, 
-                                                                n_bits_per_step=n_bits_per_step, 
-                                                                n_steps=n_steps, 
+                                                                n_bits_per_group=second_level_n_bits_per_group,
                                                                 seed=seed,
-                                                                rho=rho,
-                                                                adaptive=True)
-        
+                                                                outlier_indices=var_length_extras[2],
+                                                                outlier_samples=var_length_extras[3])
+
         decoded_second_level = tf.reshape(decoded_second_level, second_level_shape)
         
         # Now we can calculate the the first level priors
-        session.run(self.synthesis_transform_2(decoded_second_level))
-        self.prior_1 = self.synthesis_transform_2.prior
+        ops = [self.synthesis_transform_2(decoded_second_level),
+               self.synthesis_transform_2.loc, 
+               self.synthesis_transform_2.scale]
+
+        _, p1_loc, p1_scale = session.run(ops)
+        
+        self.prior_1 = tfd.Normal(loc=p1_loc, scale=p1_scale)
         
         # Get group indices back
         group_differences1 = var_length_extras[0]
         
         group_indices1 = [0]
         
-        for i in range(1, len(group_differences1)):
-            group_indices1.append(group_indices1[i - 1] + group_differences1[i])
+        for i in range(0, len(group_differences1)):
+            group_indices1.append(group_indices1[i] + group_differences1[i] + 1) 
         
         # Decode first level
         print("Decoding first level")
-        decoded_first_level = decode_grouped_greedy_sample(sess=session,
-                                                           bitcode=code1, 
-                                                            group_start_indices=group_indices1,
-                                                            proposal=self.prior_1, 
-                                                            n_bits_per_step=n_bits_per_step, 
-                                                            n_steps=n_steps, 
-                                                            seed=seed,
-                                                            rho=rho,
-                                                            adaptive=True)
-        
+        if use_importance_sampling:
+            
+            decoded_first_level = decode_grouped_importance_sample(sess=session,
+                                                                bitcode=code1, 
+                                                                group_start_indices=group_indices1[:-1],
+                                                                proposal=self.prior_1, 
+                                                                n_bits_per_group=first_level_n_bits_per_group,
+                                                                seed=seed,
+                                                                outlier_indices=var_length_extras[4],
+                                                                outlier_samples=var_length_extras[5])
+            
+
+        else:
+            decoded_first_level = decode_grouped_greedy_sample(sess=session,
+                                                               bitcode=code1, 
+                                                                group_start_indices=group_indices1,
+                                                                proposal=self.prior_1, 
+                                                                n_bits_per_step=n_bits_per_step, 
+                                                                n_steps=n_steps, 
+                                                                seed=seed,
+                                                                rho=rho,
+                                                                adaptive=True)
+            
+        np.save("/homes/gf332/compression-without-quantization/s1_decod.npy", decoded_first_level)
         decoded_first_level = tf.reshape(decoded_first_level, first_level_shape)
         
-        
+
         # -------------------------------------------------------------------------------------
         # Step 4: Reconstruct the image with the VAE
         # -------------------------------------------------------------------------------------
