@@ -273,7 +273,7 @@ class ProbabilisticLadderNetwork(tfk.Model):
         # -------------------------------------------------------------------------------------
         
         if verbose: print("Coding second level...")
-            
+           
         res = code_grouped_importance_sample(sess=session,
                                             target=q2,
                                             proposal=p2, 
@@ -289,13 +289,15 @@ class ProbabilisticLadderNetwork(tfk.Model):
             return group_start_indices
             
         sample2, code2, group_indices2, outlier_extras2 = res
+        np.save("/homes/gf332/compression-without-quantization/s2_cod.npy", sample2)
+        
         
         outlier_extras2 = list(map(lambda x: x.reshape([-1]), outlier_extras2))
         
         # The -1 at the end shifts the range of the group sizes to the 0 - 15 range from the 1 - 16 range
         # such that it can be coded as usual
         
-        group_differences2 = (group_indices2[1:] - group_indices2[:-1]) - 1
+        group_differences2 = group_indices2[1:] - group_indices2[:-1]
         
         group_indices2_ = [0]
         
@@ -315,8 +317,9 @@ class ProbabilisticLadderNetwork(tfk.Model):
         p1 = tfd.Normal(loc=p1_loc, scale=p1_scale)
         
         if verbose: print("Coding first level")
-            
+        
         if use_importance_sampling:
+            
             res = code_grouped_importance_sample(sess=session,
                                                 target=q1,
                                                 proposal=p1, 
@@ -333,6 +336,12 @@ class ProbabilisticLadderNetwork(tfk.Model):
             
             sample1, code1, group_indices1, outlier_extras1 = res
             
+            print(group_indices1[:30])
+            print(group_indices1[-30:])
+            print(code1[:70])
+            print(code1[-70:])
+            print(first_level_n_bits_per_group)
+            
         else:
             sample1, code1, group_indices1 = code_grouped_greedy_sample(sess=session,
                                                                         target=q1, 
@@ -344,14 +353,17 @@ class ProbabilisticLadderNetwork(tfk.Model):
                                                                         backfitting_steps=backfitting_steps_level_1,
                                                                         use_log_prob=use_log_prob,
                                                                         adaptive=True)
-        
-        np.save("/homes/gf332/compression-without-quantization/s1_cod.npy", sample1)
+
+#         np.save("/homes/gf332/compression-without-quantization/s1_cod.npy", sample1)
                 
         # We will encode the group differences as this will cost us less
-        group_differences1 = group_indices1[1:] - group_indices1[:-1] - 1   
+        group_differences1 = group_indices1[1:] - group_indices1[:-1] 
 
         bitcode = code1.decode("utf-8") if use_importance_sampling else code1
         bitcode += code2.decode("utf-8")
+        
+        print(len(code1))
+        print(len(code2))
         # -------------------------------------------------------------------------------------
         # Step 3: Write the compressed file
         # -------------------------------------------------------------------------------------
@@ -360,9 +372,11 @@ class ProbabilisticLadderNetwork(tfk.Model):
                  first_level_shape[1:3] + \
                  second_level_shape[1:3]
         
-        var_length_extras = [group_differences1, group_differences2]
-        var_length_bits = [first_level_max_group_size_bits,  
-                           second_level_max_group_size_bits]
+        #var_length_extras = [group_differences1, group_differences2]
+#         var_length_bits = [first_level_max_group_size_bits,  
+#                            second_level_max_group_size_bits]
+        var_length_extras = []
+        var_length_bits = []
         
         var_length_extras += outlier_extras2
         var_length_bits += [ outlier_index_bytes * 8, outlier_sample_bytes * 8 ]
@@ -372,20 +386,23 @@ class ProbabilisticLadderNetwork(tfk.Model):
             var_length_extras += outlier_extras1
             var_length_bits += [ outlier_index_bytes * 8, outlier_sample_bytes * 8 ]
             
-            
-        second_level_coder = ArithmeticCoder(np.load(second_level_counts), precision=32)
-        first_level_coder = ArithmeticCoder(np.load(first_level_counts), precision=32)
+        #np.load(second_level_counts)
+        second_level_coder = ArithmeticCoder(np.ones(2**7 + 1), precision=32)
+        #np.load(first_level_counts)
+        first_level_coder = ArithmeticCoder(np.ones(2**7 + 1), precision=32)
         
-        code = first_level_coder.encode(group_differences1 + 1)
-        decompressed = first_level_coder.decode_fast(code)
+        group_differences1 = np.concatenate((group_differences1, [0]))
+        gi1_code = first_level_coder.encode(group_differences1)
+        print(len(gi1_code))
+        print(20 * len(group_differences1))
         
-        print("HAHAH: {}".format(np.all(decompressed == (group_differences1 + 1))))
-        print(decompressed[-10:])
-        print(group_differences1[-10:] + 1)
-        
+        group_differences2 = np.concatenate((group_differences2, [0]))
+        gi2_code = second_level_coder.encode(group_differences2)
+
         write_bin_code(bitcode, 
                        comp_file_path, 
                        extras=extras,
+                       extra_var_bits=[gi1_code, gi2_code],
                        var_length_extras=var_length_extras,
                        var_length_bits=var_length_bits)
         
@@ -398,15 +415,14 @@ class ProbabilisticLadderNetwork(tfk.Model):
         total_kl = sum(total_kls)
 
         theoretical_byte_size = (total_kl + 2 * np.log(total_kl + 1)) / np.log(2) / 8
-        extra_byte_size = len(group_indices1) * var_length_bits[0] // 8 + \
-                          len(group_indices2) * var_length_bits[1] // 8 + 7 * 2
+        extra_byte_size = len(gi1_code) + len(gi2_code) + 9 * 2 // 8
         actual_byte_size = os.path.getsize(comp_file_path)
 
         actual_no_extra = actual_byte_size - extra_byte_size
         
         first_level_theoretical = (total_kls[0] + 2 * np.log(total_kls[0] + 1)) / np.log(2) / 8
         first_level_actual_no_extra = len(code1) / 8
-        first_level_extra = len(group_indices1) * var_length_bits[0] // 8
+        first_level_extra = len(gi1_code) // 8
 
         sample1_reshaped = tf.reshape(sample1, first_level_shape)
         first_level_avg_log_lik = tf.reduce_mean(self.posterior_1.log_prob(sample1_reshaped))
@@ -417,7 +433,7 @@ class ProbabilisticLadderNetwork(tfk.Model):
         
         second_level_theoretical = (total_kls[1] + 2 * np.log(total_kls[1] + 1)) / np.log(2) / 8
         second_level_actual_no_extra = len(code2) / 8
-        second_level_extra = len(group_indices2) * var_length_bits[1] // 8 + 1
+        second_level_extra = len(gi2_code) // 8 + 1
         
         second_bpp = (second_level_actual_no_extra + second_level_extra) * 8 / (image_shape[1] * image_shape[2]) 
 
@@ -494,6 +510,8 @@ class ProbabilisticLadderNetwork(tfk.Model):
                             comp_file_path,
                             use_importance_sampling=True,
                             rho=1.,
+                            second_level_counts="/homes/gf332/compression-without-quantization/group_dists_2.npy",
+                            first_level_counts="/homes/gf332/compression-without-quantization/group_dists_1.npy",
                             verbose=False):
         
         # -------------------------------------------------------------------------------------
@@ -503,14 +521,20 @@ class ProbabilisticLadderNetwork(tfk.Model):
         # the extras are: seed, n_steps, n_bits_per_step and W x H of the two latent levels
         # var length extras are the two lists of group indices
         # +2: outlier extras of the second level importance sampler
-        num_var_length_extras = 2 + 2
+        num_var_length_extras = 2
         
         if use_importance_sampling:
             num_var_length_extras += 2
         
-        code, extras, var_length_extras = read_bin_code(comp_file_path, 
-                                                        num_extras=9, 
-                                                        num_var_length_extras=num_var_length_extras)
+        code, extras, extra_var_bits, var_length_extras = read_bin_code(comp_file_path, 
+                                                                        num_extras=9, 
+                                                                        num_extra_var_bits=2,
+                                                                        num_var_length_extras=num_var_length_extras)
+        
+        second_level_coder = ArithmeticCoder(np.load(second_level_counts), precision=32)
+        first_level_coder = ArithmeticCoder(np.load(first_level_counts), precision=32)
+               
+        print(extras)
         
         seed = extras[0]
         
@@ -527,11 +551,22 @@ class ProbabilisticLadderNetwork(tfk.Model):
         num_first_level = np.prod(first_level_shape)
         num_second_level = np.prod(second_level_shape)
         
-        first_code_length = first_level_n_bits_per_group * len(var_length_extras[0])
-        second_code_length = second_level_n_bits_per_group * len(var_length_extras[1])
-           
+        # Remember to chop off the terminating EOF 0
+        group_differences2 = second_level_coder.decode_fast(extra_var_bits[1])[:-1]
+        group_differences1 = first_level_coder.decode_fast(extra_var_bits[0])[:-1]
+        print(group_differences1[-30:])
+        
+        first_code_length = first_level_n_bits_per_group * len(group_differences1)
+        second_code_length = second_level_n_bits_per_group * len(group_differences2)
+        
+        print(first_code_length)
+        print(second_code_length) 
+        
         code1 = code[:first_code_length]
         code2 = code[first_code_length:first_code_length + second_code_length]
+        
+        print(len(code1))
+        print(len(code2))
         # -------------------------------------------------------------------------------------
         # Step 2: Decode the samples
         # -------------------------------------------------------------------------------------
@@ -542,13 +577,13 @@ class ProbabilisticLadderNetwork(tfk.Model):
         
         
         # Get group indices back
-        group_differences2 = var_length_extras[1]
-        
+        #group_differences2 = var_length_extras[1]
+
         group_indices2 = [0]
         
         for i in range(0, len(group_differences2)):
             # The +1 at the end shifts the group sizes back from the range 0 - 15 to the range 1 - 16.
-            group_indices2.append(group_indices2[i] + group_differences2[i] + 1)
+            group_indices2.append(group_indices2[i] + group_differences2[i])
            
         
         print("Decoding second level")
@@ -558,9 +593,10 @@ class ProbabilisticLadderNetwork(tfk.Model):
                                                                 proposal=proposal, 
                                                                 n_bits_per_group=second_level_n_bits_per_group,
                                                                 seed=seed,
-                                                                outlier_indices=var_length_extras[2],
-                                                                outlier_samples=var_length_extras[3])
+                                                                outlier_indices=var_length_extras[0],
+                                                                outlier_samples=var_length_extras[1])
 
+        np.save("/homes/gf332/compression-without-quantization/s2_decod.npy", decoded_second_level)
         decoded_second_level = tf.reshape(decoded_second_level, second_level_shape)
         
         # Now we can calculate the the first level priors
@@ -572,26 +608,28 @@ class ProbabilisticLadderNetwork(tfk.Model):
         
         self.prior_1 = tfd.Normal(loc=p1_loc, scale=p1_scale)
         
-        # Get group indices back
-        group_differences1 = var_length_extras[0]
-        
         group_indices1 = [0]
         
         for i in range(0, len(group_differences1)):
-            group_indices1.append(group_indices1[i] + group_differences1[i] + 1) 
+            group_indices1.append(group_indices1[i] + group_differences1[i]) 
         
         # Decode first level
         print("Decoding first level")
         if use_importance_sampling:
             
+            print(group_indices1[:30])
+            print(code1[:70])
+            print(group_indices1[-30:])
+            print(code1[-70:])
+            print(first_level_n_bits_per_group)
             decoded_first_level = decode_grouped_importance_sample(sess=session,
                                                                 bitcode=code1, 
                                                                 group_start_indices=group_indices1[:-1],
                                                                 proposal=self.prior_1, 
                                                                 n_bits_per_group=first_level_n_bits_per_group,
                                                                 seed=seed,
-                                                                outlier_indices=var_length_extras[4],
-                                                                outlier_samples=var_length_extras[5])
+                                                                outlier_indices=var_length_extras[2],
+                                                                outlier_samples=var_length_extras[3])
             
 
         else:

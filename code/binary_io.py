@@ -32,7 +32,7 @@ def from_bit_string(bitcode):
         
     return num
 
-def write_bin_code(code, path, extras=None, var_length_extras=None, var_length_bits=None):
+def write_bin_code(code, path, extras=None, extra_var_bits=None, var_length_extras=None, var_length_bits=None):
     
     if var_length_extras is not None:
         if var_length_bits is None or len(var_length_extras) != len(var_length_bits):
@@ -48,7 +48,19 @@ def write_bin_code(code, path, extras=None, var_length_extras=None, var_length_b
         if extras is not None:
             for extra in extras:
                 compressed_file.write(bytes([extra // 256, extra % 256]))
+        
+        if extra_var_bits is not None:
+            for bits in extra_var_bits:
+                # First code the length of the extra on 16 bits
+                compressed_file.write(bytes([len(bits) // 256, len(bits) % 256]))
                 
+                # Pad the code
+                bits += "0" * (8 - len(bits) % 8) if len(bits) % 8 != 0 else ""
+
+                bits_message_bytes = [int('0b' + ''.join(bits[s:s + 8]), 2) for s in range(0, len(bits), 8)]
+                
+                compressed_file.write(bytes(bits_message_bytes))
+        
         if var_length_extras is not None:
             for extra, extra_bit_size in zip(var_length_extras, var_length_bits):
                 
@@ -78,7 +90,7 @@ def write_bin_code(code, path, extras=None, var_length_extras=None, var_length_b
         compressed_file.write(bytes(message_bytes))
 
 
-def read_bin_code(path, num_extras=0, num_var_length_extras=0, extra_bytes=2):
+def read_bin_code(path, num_extras=0, num_extra_var_bits=0, num_var_length_extras=0, extra_bytes=2):
 
     with open(path, "rb") as compressed_file:
         compressed = ''.join(["{:08b}".format(x) for x in compressed_file.read()])
@@ -89,7 +101,30 @@ def read_bin_code(path, num_extras=0, num_var_length_extras=0, extra_bytes=2):
     extras = [int('0b' + extra_bits[s:s + extra_bytes * 8], 2) for s in range(0, 
                                                                               num_extras * extra_bytes * 8, 
                                                                               extra_bytes * 8)]
+    extra_var_bits = []
     
+    for i in range(num_extra_var_bits):
+        
+        # Read length of current extra
+        bits_length = int('0b' + compressed[:extra_bytes * 8], 2)
+        
+        # Chop off the length information
+        compressed = compressed[extra_bytes * 8:]
+        
+        # Calculate how many bytes to read
+        bytes_to_read = bits_length // 8
+        
+        # Check if there was any padding
+        if bits_length % 8 != 0:
+            bytes_to_read += 1
+        
+        bits = compressed[:bits_length]
+        
+        compressed = compressed[bytes_to_read * 8:]
+        
+        extra_var_bits.append(bits)
+        
+        
     var_length_extras = []
     
     for i in range(num_var_length_extras):
@@ -117,4 +152,4 @@ def read_bin_code(path, num_extras=0, num_var_length_extras=0, extra_bytes=2):
         
         var_length_extras.append(extra[:extra_length])
 
-    return compressed, extras, var_length_extras
+    return compressed, extras, extra_var_bits, var_length_extras

@@ -157,7 +157,7 @@ def parse_args(argv):
             mode.add_argument("--second_level_n_bits_per_group", default=20, type=int,
                             help="Maximum total group KL in bits in the second-level sampler")
             
-            mode.add_argument("--second_level_max_group_size_bits", default=3, type=int,
+            mode.add_argument("--second_level_max_group_size_bits", default=2, type=int,
                             help="The number of bits used to code group sizes in the second-level sampler")
             
             mode.add_argument("--second_level_dim_kl_bit_limit", default=16, type=int,
