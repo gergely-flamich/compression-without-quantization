@@ -320,6 +320,8 @@ class ProbabilisticLadderNetwork(tfk.Model):
         
         if use_importance_sampling:
             
+            group_index_counts = np.zeros(2**first_level_n_bits_per_group)
+            
             res = code_grouped_importance_sample(sess=session,
                                                 target=q1,
                                                 proposal=p1, 
@@ -335,6 +337,12 @@ class ProbabilisticLadderNetwork(tfk.Model):
                 return group_start_indices
             
             sample1, code1, group_indices1, outlier_extras1 = res
+            
+            unique, counts = np.unique(group_indices1, return_counts=True)
+            
+            group_index_counts[unique] += counts
+            
+            np.save("gic.npy", group_index_counts)
             
             print(group_indices1[:30])
             print(group_indices1[-30:])
