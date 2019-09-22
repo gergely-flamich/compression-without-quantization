@@ -12,7 +12,7 @@ tfq = tf.quantization
 import tensorflow_probability as tfp
 tfd = tfp.distributions
 
-from binary_io import to_bit_string, from_bit_string
+from binary_io import to_bit_string, from_bit_string, elias_delta_code, elias_delta_decode
 
 from misc import stateless_normal_sample
 
@@ -31,7 +31,8 @@ def code_importance_sample(t_loc,
                             p_loc,
                             p_scale,
                             n_coding_bits,
-                            seed):
+                            seed,
+                          return_index_only=False):
     
     
     target=tfd.Normal(loc=t_loc,
@@ -67,24 +68,45 @@ def code_importance_sample(t_loc,
 #         raise Exception("Not enough bits to code importance sample!")
     
     # Turn the index into a bitstring
-    bitcode = tf.numpy_function(to_bit_string, [index, n_coding_bits], tf.string)
+    #bitcode = tf.numpy_function(to_bit_string, [index, n_coding_bits], tf.string)
+    
+    if return_index_only:
+        return best_sample, index + 1
+    
+    else:
+        bitcode = tf.numpy_function(elias_delta_code, [index + 1], tf.string)
 
-    return best_sample, bitcode
+        return best_sample, bitcode
 
 
 def decode_importance_sample(sample_index, 
                               p_loc,
                               p_scale,
-                              seed):
+                              seed,
+                              use_index=False):
 
-    index = tf.numpy_function(from_bit_string, [sample_index], tf.int64)
-    
-    samples = stateless_normal_sample(loc=p_loc,
+    if use_index:
+        index = sample_index - 1
+        
+        samples = stateless_normal_sample(loc=p_loc,
                                       scale=p_scale,
                                       num_samples=tf.cast(index, tf.int32) + 1,
                                       seed=seed)
+        
+        return samples[-1:, ...]
     
-    return samples[index:, ...]
+    else:
+        
+        index, code_length = tf.numpy_function(elias_delta_decode, [sample_index], (tf.int64, tf.int64))
+
+        index = index - 1
+
+        samples = stateless_normal_sample(loc=p_loc,
+                                          scale=p_scale,
+                                          num_samples=tf.cast(index, tf.int32) + 1,
+                                          seed=seed)
+
+        return samples[-1:, ...], code_length, index, samples
 
 
 def code_grouped_importance_sample(sess,
@@ -94,7 +116,9 @@ def code_grouped_importance_sample(sess,
                                     n_bits_per_group,
                                     max_group_size_bits=4,
                                     dim_kl_bit_limit=12,
-                                    return_group_indices_only=False):
+                                    return_group_indices_only=False,
+                                    return_indices=False,
+                                   return_indices_only=False):
     
     # Make sure the distributions have the correct type
     if target.dtype is not tf.float32:
@@ -103,20 +127,19 @@ def code_grouped_importance_sample(sess,
     if proposal.dtype is not tf.float32:
         raise Exception("Proposal datatype must be float32!")
         
-        
     num_dimensions = sess.run(tf.reduce_prod(tf.shape(proposal.loc)))
     
     # rescale proposal by the proposal
-    p_loc = sess.run(tf.reshape(tf.zeros_like(proposal.loc), [-1]))
-    p_scale = sess.run(tf.reshape(tf.ones_like(proposal.scale), [-1]))
+    p_loc = sess.run(tf.zeros_like(proposal.loc))
+    p_scale = sess.run(tf.ones_like(proposal.scale))
     
     # rescale target by the proposal
-    t_loc = tf.reshape((target.loc - proposal.loc) / proposal.scale, [-1])
-    t_scale = tf.reshape(target.scale / proposal.scale, [-1])
+    t_loc = (target.loc - proposal.loc) / proposal.scale
+    t_scale = target.scale / proposal.scale
     
     # If we're going to do importance sampling, separate out dimensions with large KL,
     # we'll deal with them separately.
-    kl_bits = tf.reshape(tfd.kl_divergence(target, proposal), [-1]) / np.log(2)
+    kl_bits = tfd.kl_divergence(target, proposal) / np.log(2)
 
     t_loc = sess.run(tf.where(kl_bits <= dim_kl_bit_limit, t_loc, p_loc))
     t_scale = sess.run(tf.where(kl_bits <= dim_kl_bit_limit, t_scale, p_scale))
@@ -124,7 +147,7 @@ def code_grouped_importance_sample(sess,
     # We'll send the quantized samples for dimensions with high KL
     outlier_indices = tf.where(kl_bits > dim_kl_bit_limit)
 
-    target_samples = tf.reshape(target.sample(), [-1])
+    target_samples = target.sample()
 
     # Select only the bits of the sample that are relevant
     outlier_samples = tf.gather_nd(target_samples, outlier_indices)
@@ -134,9 +157,8 @@ def code_grouped_importance_sample(sess,
 
     outlier_extras = (tf.reshape(outlier_indices, [-1]), outlier_samples)
     
-    kl_divergences = tf.reshape(
-        tfd.kl_divergence(tfd.Normal(loc=t_loc, scale=t_scale), 
-                          tfd.Normal(loc=p_loc, scale=p_scale)), [-1])
+    kl_divergences = tfd.kl_divergence(tfd.Normal(loc=t_loc, scale=t_scale), 
+                                       tfd.Normal(loc=p_loc, scale=p_scale))
 
     kl_divs = sess.run(kl_divergences)
     group_start_indices = [0]
@@ -205,7 +227,8 @@ def code_grouped_importance_sample(sess,
                                          p_loc=prop_loc,
                                          p_scale=prop_scale,
                                          seed=seed_feed,
-                                         n_coding_bits=n_bits_per_group)
+                                         n_coding_bits=n_bits_per_group,
+                                         return_index_only=return_indices_only)
             
     for i in tqdm(range(len(group_start_indices) - 1)):
         
@@ -221,7 +244,16 @@ def code_grouped_importance_sample(sess,
                                                 })
         results.append(result)
         
-    samples, codes = zip(*results)
+    # To build probability distribution we return the indices only
+    if return_indices_only:
+        
+        return indices
+    
+    if return_indices:
+        samples, indices = zip(*results)
+        
+    else:
+        samples, codes = zip(*results)
     
     bitcode = tf.numpy_function(lambda code_words: ''.join([cw.decode("utf-8") for cw in code_words]), 
                                 [codes], 
@@ -230,13 +262,16 @@ def code_grouped_importance_sample(sess,
     sample = tf.concat(samples, axis=1)
     
     # Rescale the sample
-    sample = tf.reshape(proposal.scale, [-1]) * sample + tf.reshape(proposal.loc, [-1])
+    sample = proposal.scale * sample + proposal.loc
     
     sample = tf.where(kl_bits <= dim_kl_bit_limit, tf.squeeze(sample), target_samples)
     
-    sample, bitcode, outlier_extras = sess.run([sample, bitcode, outlier_extras])
-    
-    return sample, bitcode, group_start_indices, outlier_extras
+    if return_indices:
+        sample, outlier_extras = sess.run([sample, outlier_extras])
+        return sample, indices, group_start_indices, outlier_extras
+    else:
+        sample, bitcode, outlier_extras = sess.run([sample, bitcode, outlier_extras])
+        return sample, bitcode, group_start_indices, outlier_extras
 
 
 def decode_grouped_importance_sample(sess,
@@ -246,7 +281,8 @@ def decode_grouped_importance_sample(sess,
                                      n_bits_per_group,
                                      seed,
                                      outlier_indices,
-                                     outlier_samples):
+                                     outlier_samples,
+                                     use_indices=False,):
     
     # Make sure the distributions have the correct type
     if proposal.dtype is not tf.float32:
@@ -254,19 +290,25 @@ def decode_grouped_importance_sample(sess,
     
     num_dimensions = sess.run(tf.reduce_prod(tf.shape(proposal.loc)))
     
+    # The num dimensions is not communicated, so appending it here
+    group_start_indices.append(num_dimensions)
+
     # ====================================================================== 
     # Decode each group
     # ====================================================================== 
                 
     samples = []
     
-    group_start_indices += [num_dimensions]
+    #group_start_indices += [num_dimensions]
     
-    p_loc = sess.run(tf.reshape(tf.zeros_like(proposal.loc), [-1]))
-    p_scale = sess.run(tf.reshape(tf.ones_like(proposal.scale), [-1]))
+    p_loc = sess.run(tf.zeros_like(proposal.loc))
+    p_scale = sess.run(tf.ones_like(proposal.scale))
 
     # Placeholders
-    sample_index = tf.placeholder(tf.string)
+    if use_indices:
+        sample_index = tf.placeholder(tf.int32)
+    else:
+        sample_index = tf.placeholder(tf.string)
     
     prop_loc = tf.placeholder(tf.float32, shape=[None])
     prop_scale = tf.placeholder(tf.float32, shape=[None])
@@ -277,23 +319,32 @@ def decode_grouped_importance_sample(sess,
     decode_op = decode_importance_sample(sample_index=sample_index,
                                           p_loc=prop_loc,
                                           p_scale=prop_scale,
+                                          use_index=use_indices,
                                           seed=seed_feed)
 
     for i in tqdm(range(len(group_start_indices) - 1)):
         
-        samp = sess.run(decode_op, feed_dict = {
-            sample_index: bitcode[n_bits_per_group * i: n_bits_per_group * (i + 1)],
+        samp, codelength, index, ss = sess.run(decode_op, feed_dict = {
+            sample_index: bitcode[i] if use_indices else bitcode,
             prop_loc: p_loc[group_start_indices[i]:group_start_indices[i + 1]],
             prop_scale: p_scale[group_start_indices[i]:group_start_indices[i + 1]],
             seed_feed: seed + i
         })
         
+        if not use_indices:
+            # Cut the code to only the relevant bits
+            bitcode = bitcode[codelength:]
+        
         samples.append(samp)
+        
+#         print(index)
+#         print(samp)
+#         print(ss)
 
     sample = tf.concat(samples, axis=1)
     
     # Rescale the sample
-    sample = tf.reshape(proposal.scale, [-1]) * sample + tf.reshape(proposal.loc, [-1])
+    sample = proposal.scale * sample + proposal.loc
     sample = tf.squeeze(sample)
     
     # Dequantize outliers
@@ -301,7 +352,7 @@ def decode_grouped_importance_sample(sess,
     
     # Add back the quantized outliers
     outlier_indices = tf.cast(tf.reshape(outlier_indices, [-1, 1]), tf.int32)
-    outlier_samples = tf.reshape(outlier_samples, [-1])
+    outlier_samples = outlier_samples
     
     updates = tf.scatter_nd(outlier_indices, 
                             outlier_samples, 

@@ -1,4 +1,5 @@
 import numpy as np
+from tqdm import tqdm
 
 # ------------------------------------------------------------------------------
 # Tree Nodes
@@ -37,14 +38,20 @@ class TreeLeaf:
     
 class IntervalAVLTree:
 
-    def __init__(self, nodes):
+    def __init__(self, nodes, show_loading=True):
 
         self.root = None
 
         self.depth = 0
 
-        for i in range(len(nodes)):
-            self.add(nodes[i], i)
+        if show_loading:
+            print("Building tree")
+            for i in tqdm(range(len(nodes))):
+                self.add(nodes[i], i)
+            
+        else:
+            for i in range(len(nodes)):
+                self.add(nodes[i], i)
 
 
     def add(self, val, idx):

@@ -531,38 +531,56 @@ def build_empirical_dists(args,
         group_sizes2 = np.zeros(1 + 2**args.second_level_max_group_size_bits, dtype=np.int64)
         group_sizes1 = np.zeros(1 + 2**args.first_level_max_group_size_bits, dtype=np.int64)
         
+        # The +1 is for the EOF symbol
+        sample_indices2 = np.zeros(1 + 2**args.second_level_n_bits_per_group, dtype=np.int64)
+        sample_indices1 = np.zeros(1 + 2**args.first_level_n_bits_per_group, dtype=np.int64)
+        
         for i in range(len(dataset_im_paths)):
             
+            print("=====================================")
+            print("Calculating statistics for image {}".format(i))
+            print("=====================================")
             image = sess.run(next_image)
+            
+            greedy_coder = lambda gs_1, gs_2, ind_1, ind_2: model.code_image_greedy(
+                session=sess,
+                image=image, 
+
+                seed=args.seed, 
+
+                n_steps=args.n_steps,
+                n_bits_per_step=args.n_bits_per_step,
+                greedy_max_group_size_bits=args.greedy_max_group_size_bits,
+
+                comp_file_path=None,
+
+                use_importance_sampling=True,
+
+                second_level_n_bits_per_group=args.second_level_n_bits_per_group,
+                second_level_max_group_size_bits=args.second_level_max_group_size_bits,
+                second_level_dim_kl_bit_limit=args.second_level_dim_kl_bit_limit,
+
+                first_level_n_bits_per_group=args.first_level_n_bits_per_group,
+                first_level_max_group_size_bits=args.first_level_max_group_size_bits,
+                first_level_dim_kl_bit_limit=args.first_level_dim_kl_bit_limit,
+
+                outlier_index_bytes=args.outlier_index_bytes,
+                outlier_sample_bytes=args.outlier_sample_bytes,
+
+                return_first_level_group_sizes=gs_1,
+                return_second_level_group_sizes=gs_2,
+                
+                return_first_level_indices=ind_1,
+                return_second_level_indices=ind_2,
+
+                verbose=args.verbose)
+            
+            # ====================================================================
+            # Group indices
+            # ====================================================================
 
             # Get the group indices on the second level
-            gi2 = model.code_image_greedy(session=sess,
-                                        image=image, 
-
-                                        seed=args.seed, 
-
-                                        n_steps=args.n_steps,
-                                        n_bits_per_step=args.n_bits_per_step,
-                                        greedy_max_group_size_bits=args.greedy_max_group_size_bits,
-
-                                        comp_file_path=None,
-
-                                        use_importance_sampling=True,
-
-                                        second_level_n_bits_per_group=args.second_level_n_bits_per_group,
-                                        second_level_max_group_size_bits=args.second_level_max_group_size_bits,
-                                        second_level_dim_kl_bit_limit=args.second_level_dim_kl_bit_limit,
-
-                                        first_level_n_bits_per_group=args.first_level_n_bits_per_group,
-                                        first_level_max_group_size_bits=args.first_level_max_group_size_bits,
-                                        first_level_dim_kl_bit_limit=args.first_level_dim_kl_bit_limit,
-
-                                        outlier_index_bytes=args.outlier_index_bytes,
-                                        outlier_sample_bytes=args.outlier_sample_bytes,
-
-                                        return_second_level_group_sizes=True,
-
-                                        verbose=args.verbose)
+            gi2 = greedy_coder(False, True, False, False)
             
             group_differences2 = gi2[1:] - gi2[:-1]   
             unique, counts = np.unique(group_differences2, return_counts=True)
@@ -571,33 +589,7 @@ def build_empirical_dists(args,
             group_sizes2[0] += 1
             
             # Get the group indices on the first level
-            gi1 = model.code_image_greedy(session=sess,
-                                        image=image, 
-
-                                        seed=args.seed, 
-
-                                        n_steps=args.n_steps,
-                                        n_bits_per_step=args.n_bits_per_step,
-                                        greedy_max_group_size_bits=args.greedy_max_group_size_bits,
-
-                                        comp_file_path=None,
-
-                                        use_importance_sampling=True,
-
-                                        second_level_n_bits_per_group=args.second_level_n_bits_per_group,
-                                        second_level_max_group_size_bits=args.second_level_max_group_size_bits,
-                                        second_level_dim_kl_bit_limit=args.second_level_dim_kl_bit_limit,
-
-                                        first_level_n_bits_per_group=args.first_level_n_bits_per_group,
-                                        first_level_max_group_size_bits=args.first_level_max_group_size_bits,
-                                        first_level_dim_kl_bit_limit=args.first_level_dim_kl_bit_limit,
-
-                                        outlier_index_bytes=args.outlier_index_bytes,
-                                        outlier_sample_bytes=args.outlier_sample_bytes,
-
-                                        return_first_level_group_sizes=True,
-
-                                        verbose=args.verbose)
+            gi1 = greedy_coder(True, False, False, False)
             
             group_differences1 = gi1[1:] - gi1[:-1]
             
@@ -608,6 +600,30 @@ def build_empirical_dists(args,
             
             np.save(args.output_path + "_2.npy", group_sizes2)
             np.save(args.output_path + "_1.npy", group_sizes1)
+            
+            # ====================================================================
+            # Sample indices
+            # ====================================================================
+            
+            # Get the sample indices on the second level
+            ind_2 = greedy_coder(False, False, False, True)
+            unique, counts = np.unique(ind_2, return_counts=True)
+            
+            # Shift everything by one
+            sample_indices2[unique + 1] += counts
+            sample_indices2[0] += 1
+            
+             # Get the sample indices on the first level
+            ind_1 = greedy_coder(False, False, True, False)
+            unique, counts = np.unique(ind_1, return_counts=True)
+            
+            # Shift everything by one
+            sample_indices1[unique + 1] += counts
+            sample_indices1[0] += 1
+            
+            np.save(args.output_path + "_samp_ind_2.npy", sample_indices2)
+            np.save(args.output_path + "_samp_ind_1.npy", sample_indices1)
+            
         
 def main(args):
     if args.mode == "train":

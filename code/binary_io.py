@@ -4,6 +4,40 @@ import numpy as np
 # Helper Functions
 # ==============================================================================
 
+def elias_delta_code(x):
+    
+    lg2 = np.log(2)
+    
+    n = np.floor(np.log(x) / lg2).astype(np.int32)
+    l = np.floor(np.log(n + 1) / lg2).astype(np.int32)
+
+    length_length_code = ''.join(["0"] * l)
+    length_code = to_bit_string(n + 1, l + 1)[::-1]
+    num_code = to_bit_string(x, n + 1)[::-1][1:]
+    
+    rep = length_length_code + length_code + num_code
+    
+    return rep
+
+def elias_delta_decode(x):
+    
+    # count the 0s to get the size of L
+    l = 0
+    
+    # Byte code for symbol 0 is 48
+    while x[l] == 48:
+        l += 1
+
+    x = x[l:]
+    
+    n_plus_one = from_bit_string(x[:l + 1][::-1])
+
+    x = x[l + 1:]
+    
+    num = from_bit_string(x[:n_plus_one - 1][::-1] + b"1")
+    
+    return num, 2 * l + n_plus_one
+
 def to_bit_string(num, num_bits):
     
     if num >= 2**num_bits:
@@ -47,7 +81,15 @@ def write_bin_code(code, path, extras=None, extra_var_bits=None, var_length_extr
         
         if extras is not None:
             for extra in extras:
-                compressed_file.write(bytes([extra // 256, extra % 256]))
+                
+                extra_bytes = []
+                
+                for i in range(4):
+                    extra_bytes.append(extra % 256)
+                    
+                    extra = extra // 256
+                    
+                compressed_file.write(bytes(extra_bytes[::-1]))
         
         if extra_var_bits is not None:
             for bits in extra_var_bits:
@@ -90,17 +132,17 @@ def write_bin_code(code, path, extras=None, extra_var_bits=None, var_length_extr
         compressed_file.write(bytes(message_bytes))
 
 
-def read_bin_code(path, num_extras=0, num_extra_var_bits=0, num_var_length_extras=0, extra_bytes=2):
+def read_bin_code(path, num_extras=0, num_extra_var_bits=0, num_var_length_extras=0, extras_bytes=4, extra_bytes=2):
 
     with open(path, "rb") as compressed_file:
         compressed = ''.join(["{:08b}".format(x) for x in compressed_file.read()])
 
-    extra_bits = compressed[:num_extras * extra_bytes * 8]
-    compressed = compressed[num_extras * extra_bytes * 8:]
+    extra_bits = compressed[:num_extras * extras_bytes * 8]
+    compressed = compressed[num_extras * extras_bytes * 8:]
     
-    extras = [int('0b' + extra_bits[s:s + extra_bytes * 8], 2) for s in range(0, 
-                                                                              num_extras * extra_bytes * 8, 
-                                                                              extra_bytes * 8)]
+    extras = [int('0b' + extra_bits[s:s + extras_bytes * 8], 2) for s in range(0, 
+                                                                              num_extras * extras_bytes * 8, 
+                                                                              extras_bytes * 8)]
     extra_var_bits = []
     
     for i in range(num_extra_var_bits):

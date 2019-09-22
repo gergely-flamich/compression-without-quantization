@@ -225,6 +225,7 @@ class ProbabilisticLadderNetwork(tfk.Model):
                           use_log_prob=False,
                           rho=1.,
                           use_importance_sampling=False,
+                          use_permutation=True,
                           
                           # Importance sampling parameters
                           second_level_n_bits_per_group=20,
@@ -236,38 +237,95 @@ class ProbabilisticLadderNetwork(tfk.Model):
                           outlier_index_bytes=3,
                           outlier_sample_bytes=2,
                           
-                          second_level_counts="/homes/gf332/compression-without-quantization/group_dists_2.npy",
-                          first_level_counts="/homes/gf332/compression-without-quantization/group_dists_1.npy",
+                          second_level_group_dist_counts="/homes/gf332/compression-without-quantization/group_dists_2.npy",
+                          first_level_group_dist_counts="/homes/gf332/compression-without-quantization/group_dists_1.npy",
+                          
+                          second_level_sample_index_counts="/homes/gf332/compression-without-quantization/group_dist_samp_ind_2_smooth.npy",
+                          first_level_sample_index_counts="/homes/gf332/compression-without-quantization/group_dist_samp_ind_1_smooth.npy",
                           
                           return_first_level_group_sizes=False,
+                          return_first_level_indices=False,
+                          
                           return_second_level_group_sizes=False,
+                          return_second_level_indices=False,
                           
                           verbose=False):
+        
+        flatten = lambda x: tf.reshape(x, [-1])
         
         # -------------------------------------------------------------------------------------
         # Step 1: Set the latent distributions for the image
         # -------------------------------------------------------------------------------------
         
         if verbose: print("Calculating latent distributions for image...")
-            
-        ops = [self.call(image), 
-               self.posterior_1.loc, 
-               self.posterior_1.scale,
-               self.posterior_2.loc, 
-               self.posterior_2.scale,
-               self.prior_2.loc, 
-               self.prior_2.scale]
-        
-        im, q1_loc, q1_scale, q2_loc, q2_scale, p2_loc, p2_scale = session.run(ops)
 
-        q1 = tfd.Normal(loc=q1_loc, scale=q1_scale)
-        q2 = tfd.Normal(loc=q2_loc, scale=q2_scale)
-        p2 = tfd.Normal(loc=p2_loc, scale=p2_scale)
+        q1_loc_op = flatten(self.posterior_1.loc)
+        q1_scale_op = flatten(self.posterior_1.scale)
+        
+        q2_loc_op = flatten(self.posterior_2.loc)
+        q2_scale_op = flatten(self.posterior_2.scale)
+        
+        p2_loc_op = flatten(self.prior_2.loc)
+        p2_scale_op = flatten(self.prior_2.scale)
+        
+        first_level_shape_op = tf.shape(self.prior_1.loc)
+        second_level_shape_op = tf.shape(self.prior_2.loc)
+            
+        ops = [self.call(image),
+               q1_loc_op,
+               q1_scale_op,
+               q2_loc_op,
+               q2_scale_op,
+               p2_loc_op,
+               p2_scale_op,
+               first_level_shape_op,
+               second_level_shape_op]
+        
+        im, q1_loc, q1_scale, q2_loc, q2_scale, p2_loc, p2_scale, first_level_shape, second_level_shape = session.run(ops)
+        
+        # We will randomly permute the dimensions to destroy any structure present in the vector
+        np.random.seed(seed)
+        
+        num_dim_1 = np.prod(q1_loc.shape)
+        num_dim_2 = np.prod(q2_loc.shape)
+        
+        perm_1 = np.random.permutation(num_dim_1).astype("int32") \
+                if use_permutation else np.arange(num_dim_1, dtype=np.int32)
+        perm_2 = np.random.permutation(num_dim_2).astype("int32") \
+                if use_permutation else np.arange(num_dim_2, dtype=np.int32)
+        
+        permuter_1 = tfp.bijectors.Permute(permutation=perm_1)     
+        permuter_2 = tfp.bijectors.Permute(permutation=perm_2)
+        
+        q1_loc_op = permuter_1.forward(q1_loc)
+        q1_scale_op = permuter_1.forward(q1_scale)
+        
+        q2_loc_op = permuter_2.forward(q2_loc)
+        q2_scale_op = permuter_2.forward(q2_scale)
+        
+        p2_loc_op = permuter_2.forward(p2_loc)
+        p2_scale_op = permuter_2.forward(p2_scale)
+        
+        ops = [q1_loc_op,
+               q1_scale_op,
+               q2_loc_op,
+               q2_scale_op,
+               p2_loc_op,
+               p2_scale_op]
+
+        q1_loc_, q1_scale_, q2_loc_, q2_scale_, p2_loc_, p2_scale_ = session.run(ops)
+
+
+#         q1 = tfd.Normal(loc=permuter_1.forward(q1_loc), scale=permuter_1.forward(q1_scale))
+        q2 = tfd.Normal(loc=q2_loc_, scale=q2_scale_)
+        p2 = tfd.Normal(loc=p2_loc_, scale=p2_scale_)
+            
+        q1 = tfd.Normal(loc=q1_loc_, scale=q1_scale_)
+#         q2 = tfd.Normal(loc=q2_loc, scale=q2_scale)
+#         p2 = tfd.Normal(loc=p2_loc, scale=p2_scale)
         
         image_shape = list(im.shape)
-        first_level_shape = list(q1_loc.shape)
-        second_level_shape = list(q2_loc.shape)
-
+        print(first_level_shape)
         # -------------------------------------------------------------------------------------
         # Step 2: Create a coded sample of the latent space
         # -------------------------------------------------------------------------------------
@@ -281,16 +339,22 @@ class ProbabilisticLadderNetwork(tfk.Model):
                                             seed=seed, 
                                             max_group_size_bits=second_level_max_group_size_bits,
                                             dim_kl_bit_limit=second_level_dim_kl_bit_limit,
-                                            return_group_indices_only=return_second_level_group_sizes)
+                                            return_group_indices_only=return_second_level_group_sizes,
+                                            return_indices_only=return_second_level_indices)
         
         if return_second_level_group_sizes:
             group_start_indices, group_kls = res
             
             return group_start_indices
+        
+        elif return_second_level_indices:
+            
+            return res
             
         sample2, code2, group_indices2, outlier_extras2 = res
         np.save("/homes/gf332/compression-without-quantization/s2_cod.npy", sample2)
         
+        print(outlier_extras2)
         
         outlier_extras2 = list(map(lambda x: x.reshape([-1]), outlier_extras2))
         
@@ -305,16 +369,26 @@ class ProbabilisticLadderNetwork(tfk.Model):
             # The +1 at the end shifts the group sizes back from the range 0 - 15 to the range 1 - 16.
             group_indices2_.append(group_indices2_[i] + (group_differences2[i] + 1))
          
+        # Reverse the permutation so that we can pass the sample through the second level
+        sample2 = permuter_2.inverse(sample2)
+        
         # We need to adjust the priors to the second stage sample
         latents = tf.reshape(sample2, second_level_shape)
         
+        p1_loc_op = flatten(self.synthesis_transform_2.loc)
+        p1_scale_op = flatten(self.synthesis_transform_2.scale)
+        
         ops = [self.synthesis_transform_2(latents), 
-               self.synthesis_transform_2.loc, 
-               self.synthesis_transform_2.scale]
+               permuter_1.forward(p1_loc_op), 
+               permuter_1.forward(p1_scale_op)]
         
         _, p1_loc, p1_scale = session.run(ops)
         
-        p1 = tfd.Normal(loc=p1_loc, scale=p1_scale)
+        p1 = tfd.Normal(loc=p1_loc, 
+                        scale=p1_scale)
+        
+#         p1 = tfd.Normal(loc=p1_loc, 
+#                         scale=p1_scale)
         
         if verbose: print("Coding first level")
         
@@ -329,12 +403,17 @@ class ProbabilisticLadderNetwork(tfk.Model):
                                                 seed=seed, 
                                                 max_group_size_bits=first_level_max_group_size_bits,
                                                 dim_kl_bit_limit=first_level_dim_kl_bit_limit,
-                                                return_group_indices_only=return_first_level_group_sizes)
+                                                return_group_indices_only=return_first_level_group_sizes,
+                                                return_indices_only=return_first_level_indices)
             
             if return_first_level_group_sizes:
                 group_start_indices, group_kls = res
 
                 return group_start_indices
+            
+            elif return_first_level_indices:
+                
+                return res
             
             sample1, code1, group_indices1, outlier_extras1 = res
             
@@ -343,6 +422,8 @@ class ProbabilisticLadderNetwork(tfk.Model):
             group_index_counts[unique] += counts
             
             np.save("gic.npy", group_index_counts)
+            
+#             print(outlier_extras1)
             
             print(group_indices1[:30])
             print(group_indices1[-30:])
@@ -376,9 +457,16 @@ class ProbabilisticLadderNetwork(tfk.Model):
         # Step 3: Write the compressed file
         # -------------------------------------------------------------------------------------
         
-        extras = [seed, n_steps, n_bits_per_step, first_level_n_bits_per_group, second_level_n_bits_per_group] + \
-                 first_level_shape[1:3] + \
-                 second_level_shape[1:3]
+        extras = [seed, 
+                  n_steps, 
+                  n_bits_per_step, 
+                  first_level_n_bits_per_group, 
+                  second_level_n_bits_per_group,
+                  len(code1),
+                  len(code2)
+                 ] + \
+                 list(first_level_shape[1:3]) + \
+                 list(second_level_shape[1:3])
         
         #var_length_extras = [group_differences1, group_differences2]
 #         var_length_bits = [first_level_max_group_size_bits,  
@@ -394,19 +482,22 @@ class ProbabilisticLadderNetwork(tfk.Model):
             var_length_extras += outlier_extras1
             var_length_bits += [ outlier_index_bytes * 8, outlier_sample_bytes * 8 ]
             
-        #np.load(second_level_counts)
-        second_level_coder = ArithmeticCoder(np.ones(2**7 + 1), precision=32)
-        #np.load(first_level_counts)
-        first_level_coder = ArithmeticCoder(np.ones(2**7 + 1), precision=32)
+        #second_level_sample_index_counts
+        second_level_group_size_coder = ArithmeticCoder(np.load(second_level_group_dist_counts), precision=32)
+        first_level_group_size_coder = ArithmeticCoder(np.load(first_level_group_dist_counts), precision=32)
+        
+#         second_level_index_coder = ArithmeticCoder(np.load(second_level_sample_index_counts), precision=32)
+#         first_level_index_coder = ArithmeticCoder(np.load(first_level_sample_index_counts), precision=32)
         
         group_differences1 = np.concatenate((group_differences1, [0]))
-        gi1_code = first_level_coder.encode(group_differences1)
-        print(len(gi1_code))
-        print(20 * len(group_differences1))
+        gi1_code = first_level_group_size_coder.encode(group_differences1)
+#         print(len(gi1_code))
+#         print(20 * len(group_differences1))
         
         group_differences2 = np.concatenate((group_differences2, [0]))
-        gi2_code = second_level_coder.encode(group_differences2)
+        gi2_code = second_level_group_size_coder.encode(group_differences2)
 
+        print(extras)
         write_bin_code(bitcode, 
                        comp_file_path, 
                        extras=extras,
@@ -432,7 +523,7 @@ class ProbabilisticLadderNetwork(tfk.Model):
         first_level_actual_no_extra = len(code1) / 8
         first_level_extra = len(gi1_code) // 8
 
-        sample1_reshaped = tf.reshape(sample1, first_level_shape)
+        sample1_reshaped = tf.reshape(permuter_1.inverse(sample1), first_level_shape)
         first_level_avg_log_lik = tf.reduce_mean(self.posterior_1.log_prob(sample1_reshaped))
         first_level_sample_avg = tf.reduce_mean(self.posterior_1.log_prob(self.posterior_1.sample()))
         
@@ -445,7 +536,7 @@ class ProbabilisticLadderNetwork(tfk.Model):
         
         second_bpp = (second_level_actual_no_extra + second_level_extra) * 8 / (image_shape[1] * image_shape[2]) 
 
-        sample2_reshaped = tf.reshape(sample2, second_level_shape)
+        sample2_reshaped = tf.reshape(permuter_2.inverse(sample2), second_level_shape)
         second_level_avg_log_lik = tf.reduce_mean(self.posterior_2.log_prob(sample2_reshaped))
         second_level_sample_avg = tf.reduce_mean(self.posterior_2.log_prob(self.posterior_2.sample()))
         
@@ -518,8 +609,9 @@ class ProbabilisticLadderNetwork(tfk.Model):
                             comp_file_path,
                             use_importance_sampling=True,
                             rho=1.,
-                            second_level_counts="/homes/gf332/compression-without-quantization/group_dists_2.npy",
-                            first_level_counts="/homes/gf332/compression-without-quantization/group_dists_1.npy",
+                            use_permutation=True,
+                            second_level_group_dist_counts="/homes/gf332/compression-without-quantization/group_dists_2.npy",
+                            first_level_group_dist_counts="/homes/gf332/compression-without-quantization/group_dists_1.npy",
                             verbose=False):
         
         # -------------------------------------------------------------------------------------
@@ -535,14 +627,14 @@ class ProbabilisticLadderNetwork(tfk.Model):
             num_var_length_extras += 2
         
         code, extras, extra_var_bits, var_length_extras = read_bin_code(comp_file_path, 
-                                                                        num_extras=9, 
+                                                                        num_extras=11, 
                                                                         num_extra_var_bits=2,
                                                                         num_var_length_extras=num_var_length_extras)
         
-        second_level_coder = ArithmeticCoder(np.load(second_level_counts), precision=32)
-        first_level_coder = ArithmeticCoder(np.load(first_level_counts), precision=32)
+        second_level_coder = ArithmeticCoder(np.load(second_level_group_dist_counts), precision=32)
+        first_level_coder = ArithmeticCoder(np.load(first_level_group_dist_counts), precision=32)
                
-        print(extras)
+        print("Extras: {}".format(extras))
         
         seed = extras[0]
         
@@ -550,22 +642,32 @@ class ProbabilisticLadderNetwork(tfk.Model):
         n_bits_per_step = extras[2]
         first_level_n_bits_per_group = extras[3]
         second_level_n_bits_per_group = extras[4]
+        first_code_length = extras[5]
+        second_code_length = extras[6]
         
         # Get shape information back
-        first_level_shape = [1] + extras[5:7] + [self.first_level_latent_channels]
-        second_level_shape = [1] + extras[7:] + [self.second_level_latent_channels]
+        first_level_shape = [1] + extras[7:9] + [self.first_level_latent_channels]
+        second_level_shape = [1] + extras[9:] + [self.second_level_latent_channels]
         
         # Total number of latents on levels
         num_first_level = np.prod(first_level_shape)
         num_second_level = np.prod(second_level_shape)
         
+        # Set up permutation to back-permute samples
+        np.random.seed(seed)
+        
+        perm_1 = np.random.permutation(num_first_level).astype("int32") \
+                if use_permutation else np.arange(num_first_level, dtype=np.int32)
+        perm_2 = np.random.permutation(num_second_level).astype("int32") \
+                if use_permutation else np.arange(num_second_level, dtype=np.int32)
+        
+        permuter_1 = tfp.bijectors.Permute(permutation=perm_1)     
+        permuter_2 = tfp.bijectors.Permute(permutation=perm_2)
+        
         # Remember to chop off the terminating EOF 0
         group_differences2 = second_level_coder.decode_fast(extra_var_bits[1])[:-1]
         group_differences1 = first_level_coder.decode_fast(extra_var_bits[0])[:-1]
         print(group_differences1[-30:])
-        
-        first_code_length = first_level_n_bits_per_group * len(group_differences1)
-        second_code_length = second_level_n_bits_per_group * len(group_differences2)
         
         print(first_code_length)
         print(second_code_length) 
@@ -580,8 +682,8 @@ class ProbabilisticLadderNetwork(tfk.Model):
         # -------------------------------------------------------------------------------------
         
         # Decode second level
-        proposal = tfd.Normal(loc=tf.zeros(second_level_shape),
-                              scale=tf.ones(second_level_shape))
+        proposal = tfd.Normal(loc=tf.zeros(num_second_level), #tf.zeros(second_level_shape),
+                              scale=tf.ones(num_second_level)) #tf.ones(second_level_shape))
         
         
         # Get group indices back
@@ -605,12 +707,15 @@ class ProbabilisticLadderNetwork(tfk.Model):
                                                                 outlier_samples=var_length_extras[1])
 
         np.save("/homes/gf332/compression-without-quantization/s2_decod.npy", decoded_second_level)
+        
+        # Reverse the permutation
+        decoded_second_level = permuter_2.inverse(decoded_second_level)
         decoded_second_level = tf.reshape(decoded_second_level, second_level_shape)
         
         # Now we can calculate the the first level priors
         ops = [self.synthesis_transform_2(decoded_second_level),
-               self.synthesis_transform_2.loc, 
-               self.synthesis_transform_2.scale]
+               permuter_1.forward(tf.reshape(self.synthesis_transform_2.loc, [-1])), 
+               permuter_1.forward(tf.reshape(self.synthesis_transform_2.scale, [-1]))]
 
         _, p1_loc, p1_scale = session.run(ops)
         
@@ -652,6 +757,8 @@ class ProbabilisticLadderNetwork(tfk.Model):
                                                                 adaptive=True)
             
         np.save("/homes/gf332/compression-without-quantization/s1_decod.npy", decoded_first_level)
+        # Reverse the permutation
+        decoded_first_level = permuter_1.inverse(decoded_first_level)
         decoded_first_level = tf.reshape(decoded_first_level, first_level_shape)
         
 
