@@ -299,9 +299,14 @@ def decompress(args):
         sess.run(r)
         
         reconstruction = model.decode_image_greedy(session=sess,
-                                                  comp_file_path=args.comp_file,
+                                                   comp_file_path=args.comp_file,
                                                    use_importance_sampling=args.use_importance_sampling,
-                                                  verbose=args.verbose)
+                                                   use_index_ac=args.use_index_ac,
+                                                   first_level_group_dist_counts=args.dist_prefix + first_level_group_size_postfix,
+                                                   second_level_group_dist_counts=args.dist_prefix + second_level_group_size_postfix,
+#                                                    first_level_sample_index_counts=args.dist_prefix + first_level_index_postfix,
+#                                                    second_level_sample_index_counts=args.dist_prefix + second_level_index_postfix,
+                                                   verbose=args.verbose)
         
         sess.run(write_png(args.output_file, reconstruction))
 
@@ -353,7 +358,7 @@ def compress_dataset(args,
         read_png, num_parallel_calls=16)
     image_ds = image_ds.prefetch(32)
     
-    image = image_ds.make_one_shot_iterator().get_next()
+    #image = image_ds.make_one_shot_iterator().get_next()
     # ========================================================================
     # Reload model
     # ========================================================================
@@ -372,10 +377,14 @@ def compress_dataset(args,
                                        likelihood="gaussian",
                                        learn_gamma=True)
         
-        
-    reconstruction = model(tf.zeros((1, 256, 256, 3)))
-        
     with tf.Session() as sess:
+        
+        next_image = image_ds.make_one_shot_iterator().get_next()
+
+        next_image = tf.expand_dims(next_image, 0)
+        next_image.set_shape([1, None, None, 3])
+        
+        reconstruction = model(next_image)
         # Load the latest model checkpoint, get the compressed string and the tensor
         # shapes.
         
@@ -383,10 +392,7 @@ def compress_dataset(args,
         saver = tf.train.import_meta_graph(latest + '.meta', clear_devices=True)
         saver.restore(sess, latest)
         
-        next_image = image_ds.make_one_shot_iterator().get_next()
-
-        next_image = tf.expand_dims(image, 0)
-        next_image.set_shape([1, None, None, 3])
+        
 
         for i in range(n_images):
             dataset_im_name = dataset_im_format.format(i + 1)
@@ -423,40 +429,42 @@ def compress_dataset(args,
 
                     start_time = time.time()
                     _, summaries = model.code_image_greedy(session=sess,
-                                                        image=image, 
-                                                        seed=args.seed, 
-                                                           
-                                                        n_steps=args.n_steps,
-                                                        n_bits_per_step=args.n_bits_per_step,
-                                                        greedy_max_group_size_bits=args.greedy_max_group_size_bits,
-                                                        comp_file_path=comp_file_paths[i],
-                                                           
-                                                        use_importance_sampling=args.use_importance_sampling,
-                                                           
-                                                        second_level_n_bits_per_group=args.second_level_n_bits_per_group,
-                                                        second_level_max_group_size_bits=args.second_level_max_group_size_bits,
-                                                        second_level_dim_kl_bit_limit=args.second_level_dim_kl_bit_limit,
-                                                           
-                                                        first_level_n_bits_per_group=args.first_level_n_bits_per_group,
-                                                        first_level_max_group_size_bits=args.first_level_max_group_size_bits,
-                                                        first_level_dim_kl_bit_limit=args.first_level_dim_kl_bit_limit,
-                                                           
-                                                        outlier_index_bytes=args.outlier_index_bytes,
-                                                        outlier_sample_bytes=args.outlier_sample_bytes,
-                                                           
-                                                        use_index_ac=args.use_index_ac,
+                                image=image, 
+                                seed=args.seed, 
+                                
+                                n_steps=args.n_steps,
+                                n_bits_per_step=args.n_bits_per_step,
+                                greedy_max_group_size_bits=args.greedy_max_group_size_bits,
+                                
+                                comp_file_path=comp_file_paths[i],
+                                
+                                use_importance_sampling=args.use_importance_sampling,
+                                
+                                second_level_n_bits_per_group=args.second_level_n_bits_per_group,
+                                second_level_max_group_size_bits=args.second_level_max_group_size_bits,
+                                second_level_dim_kl_bit_limit=args.second_level_dim_kl_bit_limit,
+                                
+                                first_level_n_bits_per_group=args.first_level_n_bits_per_group,
+                                first_level_max_group_size_bits=args.first_level_max_group_size_bits,
+                                first_level_dim_kl_bit_limit=args.first_level_dim_kl_bit_limit,
+                                
+                                outlier_index_bytes=args.outlier_index_bytes,
+                                outlier_sample_bytes=args.outlier_sample_bytes,
+                                
+                                use_index_ac=args.use_index_ac,
+                                use_permutation=True,                          
                 
-                                                        first_level_group_dist_counts=args.dist_prefix + first_level_group_size_postfix,
-                                                        second_level_group_dist_counts=args.dist_prefix + second_level_group_size_postfix,
+                                first_level_group_dist_counts=args.dist_prefix + first_level_group_size_postfix,
+                                second_level_group_dist_counts=args.dist_prefix + second_level_group_size_postfix,
 
-                                                        first_level_sample_index_counts=args.dist_prefix + first_level_index_postfix,
-                                                        second_level_sample_index_counts=args.dist_prefix + second_level_index_postfix,
-                                                           
-                                                        verbose=args.verbose)
+                                first_level_sample_index_counts=args.dist_prefix + first_level_index_postfix,
+                                second_level_sample_index_counts=args.dist_prefix + second_level_index_postfix,
+                                
+                                verbose=args.verbose)
 
                     encoding_time = time.time() - start_time
                     
-                    summaries["image_shape"] = summaries["image_shape"].tolist()
+                    summaries["image_shape"] = summaries["image_shape"]
 
                 if os.path.exists(reconstruction_im_paths[i]):
                     print(reconstruction_im_paths[i] + " already exists, skipping reconstruction.")
@@ -464,7 +472,10 @@ def compress_dataset(args,
                 else:
                     start_time = time.time()
                     reconstruction = model.decode_image_greedy(session=sess,
-                                                             comp_file_path=comp_file_paths[i],
+                                                               comp_file_path=comp_file_paths[i],
+                                                               first_level_group_dist_counts=args.dist_prefix + first_level_group_size_postfix,
+                                                               use_permutation=True,
+                                                               second_level_group_dist_counts=args.dist_prefix + second_level_group_size_postfix,
                                                              verbose=args.verbose,
                                                              rho=1.)
                     decoding_time = time.time() - start_time

@@ -87,6 +87,11 @@ def parse_args(argv):
     
     decompress_mode.add_argument("--use_importance_sampling", default=True, action="store_true",
                                     help="Should we use importance sampling on the first level?")
+    decompress_mode.add_argument("--use_index_ac", default=False, action="store_true",
+                            help="Should we use arithmetic coding for the MIRACLE indices?")
+    decompress_mode.add_argument("--dist_prefix", required=True,
+                            help="Path to the empirical distributions for group size and index coding.")
+            
     decompress_subparsers = decompress_mode.add_subparsers(title="model",
                                                            dest="model",
                                                            help="Current available modes: vae, pln")

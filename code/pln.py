@@ -295,6 +295,9 @@ class ProbabilisticLadderNetwork(tfk.Model):
         
         im, q1_loc, q1_scale, q2_loc, q2_scale, p2_loc, p2_scale, first_level_shape, second_level_shape = session.run(ops)
         
+#         print(q1_loc.shape)
+#         print(im.shape)
+        
         # We will randomly permute the dimensions to destroy any structure present in the vector
         np.random.seed(seed)
         
@@ -375,7 +378,7 @@ class ProbabilisticLadderNetwork(tfk.Model):
             
             #return
 
-        print(outlier_extras2)
+#         print(outlier_extras2)
         
         outlier_extras2 = list(map(lambda x: x.reshape([-1]), outlier_extras2))
         
@@ -450,11 +453,11 @@ class ProbabilisticLadderNetwork(tfk.Model):
             
 #             print(outlier_extras1)
             
-            print(group_indices1[:30])
-            print(group_indices1[-30:])
-            print(code1[:70])
-            print(code1[-70:])
-            print(first_level_n_bits_per_group)
+#             print(group_indices1[:30])
+#             print(group_indices1[-30:])
+#             print(code1[:70])
+#             print(code1[-70:])
+#             print(first_level_n_bits_per_group)
             
         else:
             sample1, code1, group_indices1 = code_grouped_greedy_sample(sess=session,
@@ -479,8 +482,8 @@ class ProbabilisticLadderNetwork(tfk.Model):
             bitcode = code1.decode("utf-8") if use_importance_sampling else code1
             bitcode += code2.decode("utf-8")
         
-        print(len(code1))
-        print(len(code2))
+#         print(len(code1))
+#         print(len(code2))
         # -------------------------------------------------------------------------------------
         # Step 3: Write the compressed file
         # -------------------------------------------------------------------------------------
@@ -525,7 +528,7 @@ class ProbabilisticLadderNetwork(tfk.Model):
         group_differences2 = np.concatenate((group_differences2, [0]))
         gi2_code = second_level_group_size_coder.encode(group_differences2)
 
-        print(extras)
+#         print(extras)
         write_bin_code(bitcode, 
                        comp_file_path, 
                        extras=extras,
@@ -638,8 +641,8 @@ class ProbabilisticLadderNetwork(tfk.Model):
                             use_importance_sampling=True,
                             rho=1.,
                             use_permutation=True,
-                            second_level_group_dist_counts="/homes/gf332/compression-without-quantization/group_dists_5_2_2.npy",
-                            first_level_group_dist_counts="/homes/gf332/compression-without-quantization/group_dists_5_2_1.npy",
+                            second_level_group_dist_counts="",
+                            first_level_group_dist_counts="",
                             second_level_sample_ac="/homes/gf332/compression-without-quantization/samp_ind_2_ac.pkl",
                             first_level_sample_ac="/homes/gf332/compression-without-quantization/samp_ind_1_ac.pkl",
                             use_index_ac=False,
@@ -666,6 +669,7 @@ class ProbabilisticLadderNetwork(tfk.Model):
                                                                         num_extras=11, 
                                                                         num_extra_var_bits=2,
                                                                         num_var_length_extras=num_var_length_extras)
+        
         
         second_level_coder = ArithmeticCoder(np.load(second_level_group_dist_counts), precision=32)
         first_level_coder = ArithmeticCoder(np.load(first_level_group_dist_counts), precision=32)
@@ -705,14 +709,14 @@ class ProbabilisticLadderNetwork(tfk.Model):
         group_differences1 = first_level_coder.decode_fast(extra_var_bits[0])[:-1]
         print(group_differences1[-30:])
         
-        print(first_code_length)
-        print(second_code_length) 
+#         print(first_code_length)
+#         print(second_code_length) 
         
         code1 = code[:first_code_length]
         code2 = code[first_code_length:first_code_length + second_code_length]
         
-        print(len(code1))
-        print(len(code2))
+#         print(len(code1))
+#         print(len(code2))
         
         if use_index_ac:
             code1 = ind_ac_1.decode_fast(code1)
