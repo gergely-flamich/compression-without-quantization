@@ -142,8 +142,14 @@ def parse_args(argv):
             mode.add_argument("--seed", default=42, type=int,
                             help="Seed to use in the compressor")
             
-            mode.add_argument("--use_importance_sampling", default=True, action="store_true",
+            mode.add_argument("--use_importance_sampling", default=False, action="store_true",
                             help="Should we use importance sampling on the first level?")
+            
+            mode.add_argument("--use_index_ac", default=False, action="store_true",
+                            help="Should we use arithmetic coding for the MIRACLE indices?")
+            
+            mode.add_argument("--dist_prefix", required=True,
+                            help="Path to the empirical distributions for group size and index coding.")
             
             mode.add_argument("--n_steps", default=30, type=int,
                             help="Number of shards for the greedy sampler")

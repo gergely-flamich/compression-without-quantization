@@ -2,6 +2,7 @@
 papers/
 compression_venv/
 compression-venv/
+dists/
 *.png
 *.c
 *.npy

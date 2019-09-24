@@ -20,6 +20,13 @@ import numpy as np
 
 import matplotlib.pyplot as plt
 
+# empirical distribution postfixes
+first_level_group_size_postfix = "_1.npy"
+second_level_group_size_postfix = "_2.npy"
+
+first_level_index_postfix = "_samp_ind_1.npy"
+second_level_index_postfix = "_samp_ind_2.npy"
+
 # ============================================================================
 # ============================================================================
 # Helper functions
@@ -249,6 +256,14 @@ def compress(args):
                                 outlier_index_bytes=args.outlier_index_bytes,
                                 outlier_sample_bytes=args.outlier_sample_bytes,
                                 
+                                use_index_ac=args.use_index_ac,
+                
+                                first_level_group_dist_counts=args.dist_prefix + first_level_group_size_postfix,
+                                second_level_group_dist_counts=args.dist_prefix + second_level_group_size_postfix,
+
+                                first_level_sample_index_counts=args.dist_prefix + first_level_index_postfix,
+                                second_level_sample_index_counts=args.dist_prefix + second_level_index_postfix,
+                                
                                 verbose=args.verbose)
 
         
@@ -429,6 +444,14 @@ def compress_dataset(args,
                                                         outlier_index_bytes=args.outlier_index_bytes,
                                                         outlier_sample_bytes=args.outlier_sample_bytes,
                                                            
+                                                        use_index_ac=args.use_index_ac,
+                
+                                                        first_level_group_dist_counts=args.dist_prefix + first_level_group_size_postfix,
+                                                        second_level_group_dist_counts=args.dist_prefix + second_level_group_size_postfix,
+
+                                                        first_level_sample_index_counts=args.dist_prefix + first_level_index_postfix,
+                                                        second_level_sample_index_counts=args.dist_prefix + second_level_index_postfix,
+                                                           
                                                         verbose=args.verbose)
 
                     encoding_time = time.time() - start_time
@@ -572,6 +595,14 @@ def build_empirical_dists(args,
                 
                 return_first_level_indices=ind_1,
                 return_second_level_indices=ind_2,
+                
+                use_index_ac=args.use_index_ac,
+                
+                first_level_group_dist_counts=args.dist_prefix + first_level_group_size_postfix,
+                second_level_group_dist_counts=args.dist_prefix + second_level_group_size_postfix,
+                
+                first_level_sample_index_counts=args.dist_prefix + first_level_index_postfix,
+                second_level_sample_index_counts=args.dist_prefix + second_level_index_postfix,
 
                 verbose=args.verbose)
             

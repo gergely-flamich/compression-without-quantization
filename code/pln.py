@@ -1,5 +1,7 @@
 import os
 
+import pickle
+
 import numpy as np
 import tensorflow as tf
 import tensorflow_compression as tfc
@@ -237,11 +239,16 @@ class ProbabilisticLadderNetwork(tfk.Model):
                           outlier_index_bytes=3,
                           outlier_sample_bytes=2,
                           
-                          second_level_group_dist_counts="/homes/gf332/compression-without-quantization/group_dists_2.npy",
-                          first_level_group_dist_counts="/homes/gf332/compression-without-quantization/group_dists_1.npy",
+                          second_level_group_dist_counts="",
+                          first_level_group_dist_counts="",
                           
-                          second_level_sample_index_counts="/homes/gf332/compression-without-quantization/group_dist_samp_ind_2_smooth.npy",
-                          first_level_sample_index_counts="/homes/gf332/compression-without-quantization/group_dist_samp_ind_1_smooth.npy",
+                          second_level_sample_index_counts="",
+                          first_level_sample_index_counts="",
+                          
+                          second_level_sample_ac="/homes/gf332/compression-without-quantization/samp_ind_2_ac.pkl",
+                          first_level_sample_ac="/homes/gf332/compression-without-quantization/samp_ind_1_ac.pkl",
+                          
+                          use_index_ac = False,
                           
                           return_first_level_group_sizes=False,
                           return_first_level_indices=False,
@@ -252,6 +259,11 @@ class ProbabilisticLadderNetwork(tfk.Model):
                           verbose=False):
         
         flatten = lambda x: tf.reshape(x, [-1])
+        
+        if use_index_ac:
+            print("loading arithmetic coders for index coding")
+            ind_ac_1 = pickle.load(open(first_level_sample_ac, "rb"))
+            ind_ac_2 = pickle.load(open(second_level_sample_ac, "rb"))
         
         # -------------------------------------------------------------------------------------
         # Step 1: Set the latent distributions for the image
@@ -340,7 +352,9 @@ class ProbabilisticLadderNetwork(tfk.Model):
                                             max_group_size_bits=second_level_max_group_size_bits,
                                             dim_kl_bit_limit=second_level_dim_kl_bit_limit,
                                             return_group_indices_only=return_second_level_group_sizes,
-                                            return_indices_only=return_second_level_indices)
+                                            return_indices_only=return_second_level_indices,
+                                            return_indices=use_index_ac)
+        
         
         if return_second_level_group_sizes:
             group_start_indices, group_kls = res
@@ -350,10 +364,17 @@ class ProbabilisticLadderNetwork(tfk.Model):
         elif return_second_level_indices:
             
             return res
-            
+
         sample2, code2, group_indices2, outlier_extras2 = res
-        np.save("/homes/gf332/compression-without-quantization/s2_cod.npy", sample2)
         
+        if use_index_ac:
+            
+            code2 = ''.join(ind_ac_2.encode(code2))
+            
+            #print(code2)
+            
+            #return
+
         print(outlier_extras2)
         
         outlier_extras2 = list(map(lambda x: x.reshape([-1]), outlier_extras2))
@@ -404,7 +425,8 @@ class ProbabilisticLadderNetwork(tfk.Model):
                                                 max_group_size_bits=first_level_max_group_size_bits,
                                                 dim_kl_bit_limit=first_level_dim_kl_bit_limit,
                                                 return_group_indices_only=return_first_level_group_sizes,
-                                                return_indices_only=return_first_level_indices)
+                                                return_indices_only=return_first_level_indices,
+                                                return_indices=use_index_ac)
             
             if return_first_level_group_sizes:
                 group_start_indices, group_kls = res
@@ -416,6 +438,9 @@ class ProbabilisticLadderNetwork(tfk.Model):
                 return res
             
             sample1, code1, group_indices1, outlier_extras1 = res
+            
+            if use_index_ac:
+                code1 = ''.join(ind_ac_1.encode(code1))
             
             unique, counts = np.unique(group_indices1, return_counts=True)
             
@@ -448,8 +473,11 @@ class ProbabilisticLadderNetwork(tfk.Model):
         # We will encode the group differences as this will cost us less
         group_differences1 = group_indices1[1:] - group_indices1[:-1] 
 
-        bitcode = code1.decode("utf-8") if use_importance_sampling else code1
-        bitcode += code2.decode("utf-8")
+        if use_index_ac:
+            bitcode = code1 + code2
+        else:
+            bitcode = code1.decode("utf-8") if use_importance_sampling else code1
+            bitcode += code2.decode("utf-8")
         
         print(len(code1))
         print(len(code2))
@@ -610,9 +638,17 @@ class ProbabilisticLadderNetwork(tfk.Model):
                             use_importance_sampling=True,
                             rho=1.,
                             use_permutation=True,
-                            second_level_group_dist_counts="/homes/gf332/compression-without-quantization/group_dists_2.npy",
-                            first_level_group_dist_counts="/homes/gf332/compression-without-quantization/group_dists_1.npy",
+                            second_level_group_dist_counts="/homes/gf332/compression-without-quantization/group_dists_5_2_2.npy",
+                            first_level_group_dist_counts="/homes/gf332/compression-without-quantization/group_dists_5_2_1.npy",
+                            second_level_sample_ac="/homes/gf332/compression-without-quantization/samp_ind_2_ac.pkl",
+                            first_level_sample_ac="/homes/gf332/compression-without-quantization/samp_ind_1_ac.pkl",
+                            use_index_ac=False,
                             verbose=False):
+        
+        if use_index_ac:
+            print("loading arithmetic coders for index coding")
+            ind_ac_1 = pickle.load(open(first_level_sample_ac, "rb"))
+            ind_ac_2 = pickle.load(open(second_level_sample_ac, "rb"))
         
         # -------------------------------------------------------------------------------------
         # Step 1: Read the compressed file
@@ -677,6 +713,10 @@ class ProbabilisticLadderNetwork(tfk.Model):
         
         print(len(code1))
         print(len(code2))
+        
+        if use_index_ac:
+            code1 = ind_ac_1.decode_fast(code1)
+            code2 = ind_ac_2.decode_fast(code2)
         # -------------------------------------------------------------------------------------
         # Step 2: Decode the samples
         # -------------------------------------------------------------------------------------
@@ -704,7 +744,8 @@ class ProbabilisticLadderNetwork(tfk.Model):
                                                                 n_bits_per_group=second_level_n_bits_per_group,
                                                                 seed=seed,
                                                                 outlier_indices=var_length_extras[0],
-                                                                outlier_samples=var_length_extras[1])
+                                                                outlier_samples=var_length_extras[1],
+                                                                use_indices=use_index_ac)
 
         np.save("/homes/gf332/compression-without-quantization/s2_decod.npy", decoded_second_level)
         
@@ -742,7 +783,8 @@ class ProbabilisticLadderNetwork(tfk.Model):
                                                                 n_bits_per_group=first_level_n_bits_per_group,
                                                                 seed=seed,
                                                                 outlier_indices=var_length_extras[2],
-                                                                outlier_samples=var_length_extras[3])
+                                                                outlier_samples=var_length_extras[3],
+                                                                use_indices=use_index_ac)
             
 
         else:

@@ -228,7 +228,7 @@ def code_grouped_importance_sample(sess,
                                          p_scale=prop_scale,
                                          seed=seed_feed,
                                          n_coding_bits=n_bits_per_group,
-                                         return_index_only=return_indices_only)
+                                         return_index_only=return_indices_only or return_indices)
             
     for i in tqdm(range(len(group_start_indices) - 1)):
         
@@ -246,7 +246,7 @@ def code_grouped_importance_sample(sess,
         
     # To build probability distribution we return the indices only
     if return_indices_only:
-        
+        samples, indices = zip(*results)
         return indices
     
     if return_indices:
@@ -255,9 +255,9 @@ def code_grouped_importance_sample(sess,
     else:
         samples, codes = zip(*results)
     
-    bitcode = tf.numpy_function(lambda code_words: ''.join([cw.decode("utf-8") for cw in code_words]), 
-                                [codes], 
-                                tf.string)
+        bitcode = tf.numpy_function(lambda code_words: ''.join([cw.decode("utf-8") for cw in code_words]), 
+                                    [codes], 
+                                    tf.string)
     
     sample = tf.concat(samples, axis=1)
     
@@ -282,7 +282,7 @@ def decode_grouped_importance_sample(sess,
                                      seed,
                                      outlier_indices,
                                      outlier_samples,
-                                     use_indices=False,):
+                                     use_indices=False):
     
     # Make sure the distributions have the correct type
     if proposal.dtype is not tf.float32:
