@@ -43,9 +43,9 @@ def parse_args(argv):
                             help="Gaussian or Laplace")
     train_mode.add_argument("--beta", default=10, type=float,
                             help="KL coefficient in the training loss")
-    train_mode.add_argument("--learning_rate", default=0.001, type=float,
+    train_mode.add_argument("--learning_rate", default=0.0001, type=float,
                             help="Learning rate")
-    train_mode.add_argument("--warmup_steps", default=40000, type=int,
+    train_mode.add_argument("--warmup_steps", default=1000, type=int,
                             help="Number of warmup steps for the KL coefficient")
     train_mode.add_argument("--learn_gamma", action="store_true", default=False,
                             help="Turns on the gamma learning technique suggested by Dai and Wipf")
@@ -218,7 +218,8 @@ def parse_args(argv):
                                         help="Number of filters for the second-level transforms")
         pln_model_parser.add_argument("--latent_channels1", default=128, type=int,
                                         help="Number of channels in the first-level latent space")
-        pln_model_parser.add_argument("--latent_channels2", default=24, type=int,
+        # Ezzel lehet jatszani
+        pln_model_parser.add_argument("--latent_channels2", default=128, type=int,
                                         help="Number of channels in the second-level latent space")
     
     # Parse arguments

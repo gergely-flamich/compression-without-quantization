@@ -72,7 +72,7 @@ class AnalysisTransform_1(tfl.Layer):
                                          use_bias=False,
                                          activation=None)
         
-        # Note the exp activation
+        # Note the tf.nn.softplus activation
         self.scale_head = tfc.SignalConv2D(filters=self.num_latent_channels, 
                                            kernel_support=(5, 5), 
                                            name="layer_scale", 
@@ -80,7 +80,7 @@ class AnalysisTransform_1(tfl.Layer):
                                            strides_down=2,
                                            padding=self.padding, 
                                            use_bias=False,
-                                           activation=tf.math.exp)
+                                           activation=tf.nn.softplus)
         
         super(AnalysisTransform_1, self).build(input_shape)
           
@@ -96,7 +96,8 @@ class AnalysisTransform_1(tfl.Layer):
         
         self.posterior = tfd.Normal(loc=self.loc,
                                     scale=self.scale)
-        
+
+        # TODO why is this N(0, 1)
         self.prior = tfd.Normal(loc=tf.zeros_like(self.loc),
                                 scale=tf.ones_like(self.scale))
         
@@ -227,7 +228,7 @@ class AnalysisTransform_2(tfl.Layer):
                                          use_bias=False,
                                          activation=None)
         
-        # Note the sigmoid activation
+        # Note the tf.nn.softplus activation
         self.scale_head = tfc.SignalConv2D(filters=self.num_latent_channels, 
                                            kernel_support=(5, 5),
                                            name="layer_scale",
@@ -235,7 +236,7 @@ class AnalysisTransform_2(tfl.Layer):
                                            strides_down=2,
                                            padding=self.padding,
                                            use_bias=False,
-                                           activation=tf.nn.sigmoid)
+                                           activation=tf.nn.softplus)
         
         super(AnalysisTransform_2, self).build(input_shape)
 

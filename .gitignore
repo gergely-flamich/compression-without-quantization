@@ -7,7 +7,7 @@ dists/
 *.c
 *.npy
 *.miracle
-
+.idea
 
 # Scratch file
 bls2017.py

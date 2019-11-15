@@ -81,6 +81,8 @@ def create_dataset(dataset_path, patch_size, batch_size, preprocess_threads, fil
             lambda x: tf.image.random_crop(x, (patch_size, patch_size, 3)))
         train_dataset = train_dataset.batch(batch_size)
         train_dataset = train_dataset.prefetch(32)
+
+    print(train_dataset)
         
     return train_dataset
 
@@ -133,12 +135,17 @@ def train(args):
 
     warmup_coef = tf.minimum(1., tf.cast(step / args.warmup_steps, tf.float32))
 
+    # Mean squared error across pixels.
+    train_mse = tf.reduce_mean(tf.squared_difference(batch, reconstructions))
+    # Multiply by 255^2 to correct for rescaling.
+    train_mse *= 255 ** 2
+
     # The multiplication is at the end is to compensate for the rescaling
     neg_log_likelihood = -tf.reduce_mean(model.log_likelihood) * 255**2
 
     bpp_regularizer = warmup_coef * args.beta * model.bpp(num_pixels)
 
-    train_loss = neg_log_likelihood + bpp_regularizer
+    train_loss = train_mse + bpp_regularizer
     
     train_step = optimizer.minimize(train_loss, global_step=step)
 

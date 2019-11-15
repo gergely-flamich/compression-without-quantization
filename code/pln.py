@@ -168,6 +168,8 @@ class ProbabilisticLadderNetwork(tfk.Model):
         likelihood_var = tf.square(self.analysis_transform_1.scale)
         prior_var = tf.square(self.synthesis_transform_2.scale)
 
+
+        # TODO understand this.
         likelihood_prec = 1. / (likelihood_var + eps)
         prior_prec = 1. / (prior_var + eps)
 
@@ -181,11 +183,18 @@ class ProbabilisticLadderNetwork(tfk.Model):
         combined_loc *= combined_var
         
         # Set latent distributions
-        self.posterior_1 = tfd.Normal(loc=combined_loc,
-                                      scale=combined_scale)
-        
+        # self.posterior_1 = tfd.Normal(loc=combined_loc,
+        #                               scale=combined_scale)
+        #
+        # self.prior_1 = self.synthesis_transform_2.prior
+        #
+        # self.posterior_2 = self.analysis_transform_2.posterior
+        # self.prior_2 = self.analysis_transform_2.prior
+        self.posterior_1 = tfd.Normal(loc=self.analysis_transform_1.loc,
+                                      scale=self.analysis_transform_1.scale)
+
         self.prior_1 = self.synthesis_transform_2.prior
-        
+
         self.posterior_2 = self.analysis_transform_2.posterior
         self.prior_2 = self.analysis_transform_2.prior
         
